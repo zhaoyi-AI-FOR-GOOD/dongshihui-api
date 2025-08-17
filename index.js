@@ -742,6 +742,164 @@ ${context || '（这是会议的开始）'}
         }), { headers: corsHeaders });
       }
 
+      // 收藏相关API
+      if (path === '/favorites' && method === 'POST') {
+        const { statement_id, response_id, favorite_type, tags, notes, user_id } = await request.json();
+
+        if (!statement_id && !response_id) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: 'statement_id or response_id is required'
+          }), {
+            status: 400,
+            headers: corsHeaders
+          });
+        }
+
+        if (!favorite_type) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: 'favorite_type is required'
+          }), {
+            status: 400,
+            headers: corsHeaders
+          });
+        }
+
+        // 检查是否已收藏
+        const existing = await env.DB.prepare(`
+          SELECT id FROM user_favorites 
+          WHERE user_id = ? AND 
+                (statement_id = ? OR response_id = ?)
+        `).bind(
+          user_id || 'default_user',
+          statement_id || null,
+          response_id || null
+        ).first();
+
+        if (existing) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: '已经收藏过这条内容'
+          }), {
+            status: 400,
+            headers: corsHeaders
+          });
+        }
+
+        const favoriteId = crypto.randomUUID();
+        await env.DB.prepare(`
+          INSERT INTO user_favorites (id, user_id, statement_id, response_id, favorite_type, tags, notes, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `).bind(
+          favoriteId, user_id || 'default_user', statement_id || null, response_id || null,
+          favorite_type, JSON.stringify(tags || []), notes || '', new Date().toISOString()
+        ).run();
+
+        return new Response(JSON.stringify({
+          success: true,
+          data: { id: favoriteId, message: '收藏成功' }
+        }), { headers: corsHeaders });
+      }
+
+      if (path === '/favorites' && method === 'GET') {
+        const url = new URL(request.url);
+        const userId = url.searchParams.get('user_id') || 'default_user';
+        const favoriteType = url.searchParams.get('type');
+
+        let query = `
+          SELECT f.*, 
+                 s.content as statement_content, s.created_at as statement_created_at,
+                 d.name as director_name, d.title as director_title, d.avatar_url as director_avatar,
+                 m.title as meeting_title, m.topic as meeting_topic,
+                 r.content as response_content, r.created_at as response_created_at
+          FROM user_favorites f
+          LEFT JOIN statements s ON f.statement_id = s.id
+          LEFT JOIN question_responses r ON f.response_id = r.id
+          LEFT JOIN directors d ON (s.director_id = d.id OR r.director_id = d.id)
+          LEFT JOIN meetings m ON s.meeting_id = m.id
+          WHERE f.user_id = ?
+        `;
+        const params = [userId];
+
+        if (favoriteType) {
+          query += ' AND f.favorite_type = ?';
+          params.push(favoriteType);
+        }
+
+        query += ' ORDER BY f.created_at DESC';
+
+        const { results } = await env.DB.prepare(query).bind(...params).all();
+
+        return new Response(JSON.stringify({
+          success: true,
+          data: results.map(fav => ({
+            ...fav,
+            content: fav.statement_content || fav.response_content,
+            content_created_at: fav.statement_created_at || fav.response_created_at,
+            director: {
+              name: fav.director_name,
+              title: fav.director_title,
+              avatar_url: fav.director_avatar
+            },
+            meeting: {
+              title: fav.meeting_title,
+              topic: fav.meeting_topic
+            },
+            tags: fav.tags ? JSON.parse(fav.tags) : []
+          }))
+        }), { headers: corsHeaders });
+      }
+
+      if (path.startsWith('/favorites/') && method === 'DELETE') {
+        const favoriteId = path.split('/')[2];
+        const url = new URL(request.url);
+        const userId = url.searchParams.get('user_id') || 'default_user';
+
+        const favorite = await env.DB.prepare(
+          'SELECT * FROM user_favorites WHERE id = ? AND user_id = ?'
+        ).bind(favoriteId, userId).first();
+
+        if (!favorite) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: 'Favorite not found'
+          }), {
+            status: 404,
+            headers: corsHeaders
+          });
+        }
+
+        await env.DB.prepare('DELETE FROM user_favorites WHERE id = ?').bind(favoriteId).run();
+
+        return new Response(JSON.stringify({
+          success: true,
+          data: { message: '取消收藏成功' }
+        }), { headers: corsHeaders });
+      }
+
+      if (path === '/favorites/tags' && method === 'GET') {
+        const url = new URL(request.url);
+        const userId = url.searchParams.get('user_id') || 'default_user';
+
+        const { results } = await env.DB.prepare(`
+          SELECT DISTINCT tags FROM user_favorites WHERE user_id = ? AND tags != '[]'
+        `).bind(userId).all();
+
+        const allTags = new Set();
+        results.forEach(row => {
+          try {
+            const tags = JSON.parse(row.tags);
+            tags.forEach(tag => allTags.add(tag));
+          } catch (e) {}
+        });
+
+        return new Response(JSON.stringify({
+          success: true,
+          data: Array.from(allTags).sort()
+        }), { headers: corsHeaders });
+      }
+
       // 获取会议详情（包含参与者和发言）
       if (path.startsWith('/meetings/') && !path.includes('/', 10) && method === 'GET') {
         const meetingId = path.split('/')[2];
