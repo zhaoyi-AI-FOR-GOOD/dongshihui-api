@@ -609,7 +609,7 @@ ${context || '（这是会议的开始）'}
         }), { headers: corsHeaders });
       }
 
-      if (path.startsWith('/meetings/') && path.includes('/questions') && !path.endsWith('/questions') && method === 'GET') {
+      if (path.startsWith('/meetings/') && path.endsWith('/questions') && method === 'GET') {
         const meetingId = path.split('/')[2];
         
         const { results: questions } = await env.DB.prepare(`
@@ -621,6 +621,30 @@ ${context || '（这是会议的开始）'}
           GROUP BY q.id
           ORDER BY q.created_at DESC
         `).bind(meetingId).all();
+
+        // 获取每个问题的完整回应信息
+        for (let question of questions) {
+          const { results: responses } = await env.DB.prepare(`
+            SELECT r.*, d.name as director_name, d.title as director_title, d.avatar_url as director_avatar
+            FROM question_responses r
+            JOIN directors d ON r.director_id = d.id
+            WHERE r.question_id = ?
+            ORDER BY r.response_order
+          `).bind(question.id).all();
+          
+          question.responses = responses.map(r => ({
+            id: r.id,
+            content: r.content,
+            director: {
+              name: r.director_name,
+              title: r.director_title,
+              avatar_url: r.director_avatar
+            },
+            created_at: r.created_at
+          }));
+          
+          question.status = responses.length > 0 ? 'answered' : 'pending';
+        }
 
         return new Response(JSON.stringify({
           success: true,
