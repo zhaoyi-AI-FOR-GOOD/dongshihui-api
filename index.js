@@ -516,8 +516,10 @@ ${context || '（这是会议的开始）'}
           });
         }
 
-        // 简化删除逻辑 - 直接删除
-
+        // 先删除相关的外键引用记录
+        await env.DB.prepare('DELETE FROM statements WHERE director_id = ?').bind(directorId).run();
+        await env.DB.prepare('DELETE FROM meeting_participants WHERE director_id = ?').bind(directorId).run();
+        
         // 删除董事
         await env.DB.prepare('DELETE FROM directors WHERE id = ?').bind(directorId).run();
 
