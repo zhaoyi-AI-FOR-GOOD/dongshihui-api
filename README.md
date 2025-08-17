@@ -39,3 +39,7 @@ wrangler deploy
 ## 数据库
 
 使用 Cloudflare D1，schema见 `schema.sql`
+
+## 版本
+
+当前版本：v1.0.0 - Git自动部署配置完成
