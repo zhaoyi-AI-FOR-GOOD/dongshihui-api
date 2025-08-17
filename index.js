@@ -58,6 +58,97 @@ export default {
         }), { headers: corsHeaders });
       }
 
+      // 获取单个董事详情
+      if (path.startsWith('/directors/') && !path.includes('/', 11) && method === 'GET') {
+        const directorId = path.split('/')[2];
+        
+        const director = await env.DB.prepare(
+          'SELECT * FROM directors WHERE id = ?'
+        ).bind(directorId).first();
+
+        if (!director) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: 'Director not found'
+          }), {
+            status: 404,
+            headers: corsHeaders
+          });
+        }
+
+        // 获取董事统计信息
+        const { results: meetingStats } = await env.DB.prepare(`
+          SELECT COUNT(*) as meeting_count
+          FROM meeting_participants mp
+          WHERE mp.director_id = ?
+        `).bind(directorId).all();
+
+        const { results: statementStats } = await env.DB.prepare(`
+          SELECT COUNT(*) as statement_count
+          FROM statements s
+          WHERE s.director_id = ?
+        `).bind(directorId).all();
+
+        const directorWithStats = {
+          ...director,
+          total_meetings: meetingStats[0]?.meeting_count || 0,
+          total_statements: statementStats[0]?.statement_count || 0,
+          personality_traits: director.personality_traits ? JSON.parse(director.personality_traits) : [],
+          core_beliefs: director.core_beliefs ? JSON.parse(director.core_beliefs) : [],
+          expertise_areas: director.expertise_areas ? JSON.parse(director.expertise_areas) : []
+        };
+
+        return new Response(JSON.stringify({
+          success: true,
+          data: directorWithStats
+        }), { headers: corsHeaders });
+      }
+
+      // 更新董事信息
+      if (path.startsWith('/directors/') && !path.includes('/', 11) && method === 'PUT') {
+        const directorId = path.split('/')[2];
+        const updateData = await request.json();
+        
+        const director = await env.DB.prepare(
+          'SELECT * FROM directors WHERE id = ?'
+        ).bind(directorId).first();
+
+        if (!director) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: 'Director not found'
+          }), {
+            status: 404,
+            headers: corsHeaders
+          });
+        }
+
+        await env.DB.prepare(`
+          UPDATE directors 
+          SET name = ?, title = ?, era = ?, system_prompt = ?, avatar_url = ?,
+              personality_traits = ?, core_beliefs = ?, speaking_style = ?, 
+              expertise_areas = ?, updated_at = ?
+          WHERE id = ?
+        `).bind(
+          updateData.name || director.name,
+          updateData.title || director.title,
+          updateData.era || director.era,
+          updateData.system_prompt || director.system_prompt,
+          updateData.avatar_url || director.avatar_url,
+          JSON.stringify(updateData.personality_traits || []),
+          JSON.stringify(updateData.core_beliefs || []),
+          updateData.speaking_style || director.speaking_style,
+          JSON.stringify(updateData.expertise_areas || []),
+          new Date().toISOString(),
+          directorId
+        ).run();
+
+        return new Response(JSON.stringify({
+          success: true,
+          data: { message: 'Director updated successfully' }
+        }), { headers: corsHeaders });
+      }
+
       if (path === '/directors/create-from-prompt' && method === 'POST') {
         const { system_prompt, avatar_url } = await request.json();
 
