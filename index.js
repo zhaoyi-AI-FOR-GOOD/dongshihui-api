@@ -565,6 +565,183 @@ ${context || '（这是会议的开始）'}
         }), { headers: corsHeaders });
       }
 
+      // 用户提问相关API
+      if (path.startsWith('/meetings/') && path.endsWith('/questions') && method === 'POST') {
+        const meetingId = path.split('/')[2];
+        const { question, asker_name, question_type } = await request.json();
+
+        if (!question) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: 'Question is required'
+          }), {
+            status: 400,
+            headers: corsHeaders
+          });
+        }
+
+        const meeting = await env.DB.prepare(
+          'SELECT * FROM meetings WHERE id = ?'
+        ).bind(meetingId).first();
+
+        if (!meeting) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: 'Meeting not found'
+          }), {
+            status: 404,
+            headers: corsHeaders
+          });
+        }
+
+        const questionId = crypto.randomUUID();
+        await env.DB.prepare(`
+          INSERT INTO user_questions (id, meeting_id, question, asker_name, question_type, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `).bind(
+          questionId, meetingId, question, asker_name || '用户',
+          question_type || 'general', new Date().toISOString(), new Date().toISOString()
+        ).run();
+
+        return new Response(JSON.stringify({
+          success: true,
+          data: { id: questionId, question, status: 'pending' }
+        }), { headers: corsHeaders });
+      }
+
+      if (path.startsWith('/meetings/') && path.includes('/questions') && !path.endsWith('/questions') && method === 'GET') {
+        const meetingId = path.split('/')[2];
+        
+        const { results: questions } = await env.DB.prepare(`
+          SELECT q.*, 
+                 COUNT(r.id) as response_count
+          FROM user_questions q
+          LEFT JOIN question_responses r ON q.id = r.question_id
+          WHERE q.meeting_id = ?
+          GROUP BY q.id
+          ORDER BY q.created_at DESC
+        `).bind(meetingId).all();
+
+        return new Response(JSON.stringify({
+          success: true,
+          data: questions
+        }), { headers: corsHeaders });
+      }
+
+      if (path.startsWith('/meetings/') && path.includes('/questions/') && path.endsWith('/respond') && method === 'POST') {
+        const pathParts = path.split('/');
+        const meetingId = pathParts[2];
+        const questionId = pathParts[4];
+
+        const question = await env.DB.prepare(
+          'SELECT * FROM user_questions WHERE id = ? AND meeting_id = ?'
+        ).bind(questionId, meetingId).first();
+
+        if (!question) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: 'Question not found'
+          }), {
+            status: 404,
+            headers: corsHeaders
+          });
+        }
+
+        // 获取会议参与的董事
+        const { results: participants } = await env.DB.prepare(`
+          SELECT mp.*, d.* 
+          FROM meeting_participants mp 
+          JOIN directors d ON mp.director_id = d.id 
+          WHERE mp.meeting_id = ? AND mp.is_active = 1 
+          ORDER BY mp.join_order
+        `).bind(meetingId).all();
+
+        if (participants.length === 0) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: 'No participants found'
+          }), {
+            status: 400,
+            headers: corsHeaders
+          });
+        }
+
+        // 为每个董事生成回应
+        const responses = [];
+        for (let i = 0; i < participants.length; i++) {
+          const director = participants[i];
+          
+          const prompt = `你是${director.name}，${director.title}。
+
+人设背景：${director.system_prompt}
+
+有用户在会议中提出了问题："${question.question}"
+
+请根据你的人设特点和专业领域，简洁地回应这个问题。回应应该：
+1. 体现你的历史背景和观点立场
+2. 保持你独特的说话风格
+3. 长度控制在50-150字
+4. 直接回答问题，不要过度解释
+
+请直接返回回应内容，不要包含任何格式标记。`;
+
+          const claudeResponse = await fetch('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-api-key': env.CLAUDE_API_KEY,
+              'anthropic-version': '2023-06-01'
+            },
+            body: JSON.stringify({
+              model: 'claude-sonnet-4-20250514',
+              max_tokens: 300,
+              messages: [{
+                role: 'user',
+                content: prompt
+              }]
+            })
+          });
+
+          if (claudeResponse.ok) {
+            const claudeData = await claudeResponse.json();
+            const responseContent = claudeData.content[0].text;
+
+            const responseId = crypto.randomUUID();
+            await env.DB.prepare(`
+              INSERT INTO question_responses (id, question_id, director_id, content, response_order, tokens_used, created_at, updated_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            `).bind(
+              responseId, questionId, director.director_id, responseContent, i + 1,
+              claudeData.usage?.output_tokens || 0, new Date().toISOString(), new Date().toISOString()
+            ).run();
+
+            responses.push({
+              id: responseId,
+              director: {
+                name: director.name,
+                title: director.title,
+                avatar_url: director.avatar_url
+              },
+              content: responseContent,
+              response_order: i + 1
+            });
+          }
+        }
+
+        // 更新问题状态
+        await env.DB.prepare(`
+          UPDATE user_questions SET status = 'answered', updated_at = ? WHERE id = ?
+        `).bind(new Date().toISOString(), questionId).run();
+
+        return new Response(JSON.stringify({
+          success: true,
+          data: {
+            question_id: questionId,
+            responses: responses
+          }
+        }), { headers: corsHeaders });
+      }
+
       // 获取会议详情（包含参与者和发言）
       if (path.startsWith('/meetings/') && !path.includes('/', 10) && method === 'GET') {
         const meetingId = path.split('/')[2];
