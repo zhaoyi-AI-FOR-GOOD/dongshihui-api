@@ -658,25 +658,13 @@ ${context || '（这是会议的开始）'}
 
         // 同时保存到user_questions表用于详细管理
         const questionId = crypto.randomUUID();
-        try {
-          // 尝试包含statement_id的新版本
-          await env.DB.prepare(`
-            INSERT INTO user_questions (id, meeting_id, question, asker_name, question_type, statement_id, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-          `).bind(
-            questionId, meetingId, question, asker_name || '用户',
-            question_type || 'general', statementId, new Date().toISOString(), new Date().toISOString()
-          ).run();
-        } catch (error) {
-          // 如果失败，使用旧版本（没有statement_id字段）
-          await env.DB.prepare(`
-            INSERT INTO user_questions (id, meeting_id, question, asker_name, question_type, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-          `).bind(
-            questionId, meetingId, question, asker_name || '用户',
-            question_type || 'general', new Date().toISOString(), new Date().toISOString()
-          ).run();
-        }
+        await env.DB.prepare(`
+          INSERT INTO user_questions (id, meeting_id, question, asker_name, question_type, statement_id, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `).bind(
+          questionId, meetingId, question, asker_name || '用户',
+          question_type || 'general', statementId, new Date().toISOString(), new Date().toISOString()
+        ).run();
 
         // 更新会议统计
         await env.DB.prepare(`
