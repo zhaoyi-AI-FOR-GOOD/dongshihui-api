@@ -900,6 +900,240 @@ ${context || '（这是会议的开始）'}
         }), { headers: corsHeaders });
       }
 
+      // 董事组合相关API
+      if (path === '/director-groups' && method === 'POST') {
+        const { name, description, director_ids, user_id } = await request.json();
+
+        if (!name || !director_ids || director_ids.length === 0) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: 'Name and director_ids are required'
+          }), {
+            status: 400,
+            headers: corsHeaders
+          });
+        }
+
+        const groupId = crypto.randomUUID();
+        
+        // 创建董事组合
+        await env.DB.prepare(`
+          INSERT INTO director_groups (id, name, description, user_id, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `).bind(
+          groupId, name, description || '', user_id || 'default_user',
+          new Date().toISOString(), new Date().toISOString()
+        ).run();
+
+        // 添加组合成员
+        for (let i = 0; i < director_ids.length; i++) {
+          const memberId = crypto.randomUUID();
+          await env.DB.prepare(`
+            INSERT INTO group_members (id, group_id, director_id, member_order, added_at)
+            VALUES (?, ?, ?, ?, ?)
+          `).bind(
+            memberId, groupId, director_ids[i], i + 1, new Date().toISOString()
+          ).run();
+        }
+
+        return new Response(JSON.stringify({
+          success: true,
+          data: { id: groupId, name, description, member_count: director_ids.length }
+        }), { headers: corsHeaders });
+      }
+
+      if (path === '/director-groups' && method === 'GET') {
+        const url = new URL(request.url);
+        const userId = url.searchParams.get('user_id') || 'default_user';
+
+        const { results: groups } = await env.DB.prepare(`
+          SELECT dg.*, COUNT(gm.id) as member_count
+          FROM director_groups dg
+          LEFT JOIN group_members gm ON dg.id = gm.group_id
+          WHERE dg.user_id = ?
+          GROUP BY dg.id
+          ORDER BY dg.created_at DESC
+        `).bind(userId).all();
+
+        return new Response(JSON.stringify({
+          success: true,
+          data: groups
+        }), { headers: corsHeaders });
+      }
+
+      if (path.startsWith('/director-groups/') && !path.includes('/', 18) && method === 'GET') {
+        const groupId = path.split('/')[2];
+        
+        const group = await env.DB.prepare(
+          'SELECT * FROM director_groups WHERE id = ?'
+        ).bind(groupId).first();
+
+        if (!group) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: 'Group not found'
+          }), {
+            status: 404,
+            headers: corsHeaders
+          });
+        }
+
+        // 获取组合成员
+        const { results: members } = await env.DB.prepare(`
+          SELECT gm.*, d.name, d.title, d.avatar_url, d.era, d.expertise_areas
+          FROM group_members gm
+          JOIN directors d ON gm.director_id = d.id
+          WHERE gm.group_id = ?
+          ORDER BY gm.member_order
+        `).bind(groupId).all();
+
+        return new Response(JSON.stringify({
+          success: true,
+          data: {
+            ...group,
+            members: members.map(m => ({
+              ...m,
+              director: {
+                id: m.director_id,
+                name: m.name,
+                title: m.title,
+                avatar_url: m.avatar_url,
+                era: m.era,
+                expertise_areas: m.expertise_areas
+              }
+            }))
+          }
+        }), { headers: corsHeaders });
+      }
+
+      if (path.startsWith('/director-groups/') && method === 'DELETE') {
+        const groupId = path.split('/')[2];
+        const url = new URL(request.url);
+        const userId = url.searchParams.get('user_id') || 'default_user';
+
+        const group = await env.DB.prepare(
+          'SELECT * FROM director_groups WHERE id = ? AND user_id = ?'
+        ).bind(groupId, userId).first();
+
+        if (!group) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: 'Group not found'
+          }), {
+            status: 404,
+            headers: corsHeaders
+          });
+        }
+
+        // 删除组合成员
+        await env.DB.prepare('DELETE FROM group_members WHERE group_id = ?').bind(groupId).run();
+        
+        // 删除组合
+        await env.DB.prepare('DELETE FROM director_groups WHERE id = ?').bind(groupId).run();
+
+        return new Response(JSON.stringify({
+          success: true,
+          data: { message: 'Director group deleted successfully' }
+        }), { headers: corsHeaders });
+      }
+
+      if (path.startsWith('/meetings/from-group/') && method === 'POST') {
+        const groupId = path.split('/')[3];
+        const { title, description, topic, discussion_mode, max_rounds } = await request.json();
+
+        if (!title || !topic) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: 'Title and topic are required'
+          }), {
+            status: 400,
+            headers: corsHeaders
+          });
+        }
+
+        // 获取组合成员
+        const { results: members } = await env.DB.prepare(`
+          SELECT director_id FROM group_members WHERE group_id = ? ORDER BY member_order
+        `).bind(groupId).all();
+
+        if (members.length === 0) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: 'No directors in group'
+          }), {
+            status: 400,
+            headers: corsHeaders
+          });
+        }
+
+        const director_ids = members.map(m => m.director_id);
+
+        // 创建会议（复用现有逻辑）
+        const meetingId = crypto.randomUUID();
+        const meeting = {
+          id: meetingId,
+          title,
+          description: description || '',
+          topic,
+          status: 'preparing',
+          max_rounds: max_rounds || 10,
+          current_round: 0,
+          discussion_mode: discussion_mode || 'round_robin',
+          max_participants: director_ids.length,
+          total_statements: 0,
+          total_participants: director_ids.length,
+          created_by: 'user',
+          settings: JSON.stringify({}),
+          summary: '',
+          key_points: JSON.stringify([]),
+          controversies: JSON.stringify([]),
+          metadata: JSON.stringify({ created_from_group: groupId }),
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        };
+
+        await env.DB.prepare(`
+          INSERT INTO meetings (id, title, description, topic, status, max_rounds, current_round,
+                              discussion_mode, max_participants, total_statements, total_participants,
+                              created_by, settings, summary, key_points, controversies, metadata,
+                              created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).bind(
+          meeting.id, meeting.title, meeting.description, meeting.topic, meeting.status,
+          meeting.max_rounds, meeting.current_round, meeting.discussion_mode,
+          meeting.max_participants, meeting.total_statements, meeting.total_participants,
+          meeting.created_by, meeting.settings, meeting.summary, meeting.key_points,
+          meeting.controversies, meeting.metadata, meeting.created_at, meeting.updated_at
+        ).run();
+
+        // 添加参与者
+        for (let i = 0; i < director_ids.length; i++) {
+          const directorId = director_ids[i];
+          const participantId = crypto.randomUUID();
+          
+          await env.DB.prepare(`
+            INSERT INTO meeting_participants (id, meeting_id, director_id, join_order, is_active,
+                                           status, statements_count, total_tokens_used, joined_at,
+                                           settings, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).bind(
+            participantId, meetingId, directorId, i + 1, 1, 'joined', 0, 0,
+            new Date().toISOString(), JSON.stringify({}),
+            new Date().toISOString(), new Date().toISOString()
+          ).run();
+        }
+
+        // 更新组合使用次数
+        await env.DB.prepare(`
+          UPDATE director_groups SET usage_count = usage_count + 1, updated_at = ? WHERE id = ?
+        `).bind(new Date().toISOString(), groupId).run();
+
+        return new Response(JSON.stringify({
+          success: true,
+          data: meeting
+        }), { headers: corsHeaders });
+      }
+
       // 获取会议详情（包含参与者和发言）
       if (path.startsWith('/meetings/') && !path.includes('/', 10) && method === 'GET') {
         const meetingId = path.split('/')[2];
