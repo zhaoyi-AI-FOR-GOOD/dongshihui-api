@@ -402,11 +402,43 @@ Return only JSON, no other text.`
         const recentStatements = statements.slice(0, 5).reverse();
         const context = recentStatements.map(s => {
           const speaker = participants.find(p => p.director_id === s.director_id);
+          if (s.content_type === 'user_question') {
+            return s.content; // 用户问题直接显示
+          }
           return `${speaker?.name || 'Unknown'}: ${s.content}`;
         }).join('\n\n');
 
+        // 检查最近是否有用户提问需要回应
+        const latestUserQuestion = statements.find(s => s.content_type === 'user_question');
+        const hasRecentQuestion = latestUserQuestion && 
+          statements.filter(s => s.created_at > latestUserQuestion.created_at && s.director_id).length === 0;
+
         // 调用Claude API生成发言
-        const prompt = `你是${nextDirector.name}，${nextDirector.title}。
+        let prompt;
+        if (hasRecentQuestion) {
+          // 如果有未回应的用户问题，重点回应
+          const questionContent = latestUserQuestion.content.replace(/【用户提问 - .*?】: /, '');
+          prompt = `你是${nextDirector.name}，${nextDirector.title}。
+
+人设背景：${nextDirector.system_prompt}
+
+会议话题：${meeting.topic}
+
+刚才有用户提出了问题："${questionContent}"
+
+之前的讨论背景：
+${context || '（这是会议的开始）'}
+
+请根据你的人设特点和专业领域，回应这个用户问题。回应应该：
+1. 直接针对用户的问题给出你的观点
+2. 体现你的历史背景和专业领域
+3. 保持你独特的说话风格
+4. 长度控制在100-300字
+
+请直接返回回应内容，不要包含任何格式标记。`;
+        } else {
+          // 正常的会议讨论
+          prompt = `你是${nextDirector.name}，${nextDirector.title}。
 
 人设背景：${nextDirector.system_prompt}
 
@@ -422,6 +454,7 @@ ${context || '（这是会议的开始）'}
 4. 长度控制在100-300字
 
 请直接返回发言内容，不要包含任何格式标记。`;
+        }
 
         const claudeResponse = await fetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
@@ -594,18 +627,61 @@ ${context || '（这是会议的开始）'}
           });
         }
 
+        // 获取当前轮次和发言顺序
+        const { results: statements } = await env.DB.prepare(`
+          SELECT * FROM statements 
+          WHERE meeting_id = ? 
+          ORDER BY round_number DESC, sequence_in_round DESC
+          LIMIT 1
+        `).bind(meetingId).all();
+
+        let roundNumber = meeting.current_round;
+        let sequenceInRound = 1;
+        
+        if (statements.length > 0) {
+          const lastStatement = statements[0];
+          roundNumber = lastStatement.round_number;
+          sequenceInRound = lastStatement.sequence_in_round + 1;
+        }
+
+        // 将用户问题作为特殊的statement保存到会议记录中
+        const statementId = crypto.randomUUID();
+        await env.DB.prepare(`
+          INSERT INTO statements (id, meeting_id, director_id, content, round_number, 
+                                sequence_in_round, content_type, tokens_used, claude_model, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).bind(
+          statementId, meetingId, null, `【用户提问 - ${asker_name || '用户'}】: ${question}`,
+          roundNumber, sequenceInRound, 'user_question', 0, 'user_input',
+          new Date().toISOString(), new Date().toISOString()
+        ).run();
+
+        // 同时保存到user_questions表用于详细管理
         const questionId = crypto.randomUUID();
         await env.DB.prepare(`
-          INSERT INTO user_questions (id, meeting_id, question, asker_name, question_type, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
+          INSERT INTO user_questions (id, meeting_id, question, asker_name, question_type, statement_id, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         `).bind(
           questionId, meetingId, question, asker_name || '用户',
-          question_type || 'general', new Date().toISOString(), new Date().toISOString()
+          question_type || 'general', statementId, new Date().toISOString(), new Date().toISOString()
         ).run();
+
+        // 更新会议统计
+        await env.DB.prepare(`
+          UPDATE meetings 
+          SET total_statements = total_statements + 1, updated_at = ?
+          WHERE id = ?
+        `).bind(new Date().toISOString(), meetingId).run();
 
         return new Response(JSON.stringify({
           success: true,
-          data: { id: questionId, question, status: 'pending' }
+          data: { 
+            id: questionId, 
+            statement_id: statementId,
+            question, 
+            asker_name: asker_name || '用户',
+            status: 'pending' 
+          }
         }), { headers: corsHeaders });
       }
 
