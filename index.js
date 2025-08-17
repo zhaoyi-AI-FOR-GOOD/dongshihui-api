@@ -1443,6 +1443,140 @@ ${discussionContent}
         }
       }
 
+      // 会议全文导出API
+      if (path.startsWith('/meetings/') && path.endsWith('/export') && method === 'POST') {
+        const meetingId = path.split('/')[2];
+        const { export_type, include_analysis } = await request.json();
+
+        const meeting = await env.DB.prepare(
+          'SELECT * FROM meetings WHERE id = ?'
+        ).bind(meetingId).first();
+
+        if (!meeting) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: 'Meeting not found'
+          }), {
+            status: 404,
+            headers: corsHeaders
+          });
+        }
+
+        // 获取详细的会议数据
+        const { results: statements } = await env.DB.prepare(`
+          SELECT s.*, d.name as director_name, d.title as director_title, d.era as director_era
+          FROM statements s
+          JOIN directors d ON s.director_id = d.id
+          WHERE s.meeting_id = ?
+          ORDER BY s.round_number, s.sequence_in_round
+        `).bind(meetingId).all();
+
+        const { results: participants } = await env.DB.prepare(`
+          SELECT mp.*, d.name, d.title, d.era, d.expertise_areas
+          FROM meeting_participants mp
+          JOIN directors d ON mp.director_id = d.id
+          WHERE mp.meeting_id = ?
+          ORDER BY mp.join_order
+        `).bind(meetingId).all();
+
+        const { results: questions } = await env.DB.prepare(`
+          SELECT q.*, COUNT(r.id) as response_count
+          FROM user_questions q
+          LEFT JOIN question_responses r ON q.id = r.question_id
+          WHERE q.meeting_id = ?
+          GROUP BY q.id
+          ORDER BY q.created_at
+        `).bind(meetingId).all();
+
+        // 生成不同格式的导出内容
+        let exportContent = '';
+        let shareId = crypto.randomUUID();
+
+        if (export_type === 'markdown') {
+          exportContent = `# ${meeting.title}
+
+**会议信息**
+- 讨论话题：${meeting.topic}
+- 开始时间：${meeting.started_at || '未开始'}
+- 状态：${meeting.status}
+- 轮数：${meeting.current_round}/${meeting.max_rounds}
+- 总发言：${statements.length}条
+
+## 参与董事
+
+${participants.map(p => `- **${p.name}**（${p.title}，${p.era}）`).join('\n')}
+
+## 会议讨论记录
+
+${statements.map((s, index) => {
+  const roundMark = index === 0 || s.round_number !== statements[index - 1]?.round_number 
+    ? `\n### 第${s.round_number}轮\n\n` : '';
+  
+  return `${roundMark}**${s.director_name}**：\n\n${s.content}\n\n---\n`;
+}).join('')}
+
+${questions.length > 0 ? `## 用户提问
+
+${questions.map((q, index) => `**问题${index + 1}**：${q.question}\n*提问者：${q.asker_name}*\n`).join('\n')}` : ''}
+
+---
+*由私人董事会系统自动生成*`;
+
+        } else if (export_type === 'text') {
+          exportContent = `${meeting.title}
+
+会议信息：
+讨论话题：${meeting.topic}
+开始时间：${meeting.started_at || '未开始'}
+参与董事：${participants.map(p => p.name).join('、')}
+总发言数：${statements.length}条
+
+════════════════════════════════════════
+
+会议讨论记录：
+
+${statements.map((s, index) => {
+  const roundMark = index === 0 || s.round_number !== statements[index - 1]?.round_number 
+    ? `\n【第${s.round_number}轮】\n` : '';
+  
+  return `${roundMark}${s.director_name}（${s.director_title}）：\n${s.content}\n`;
+}).join('\n')}
+
+${questions.length > 0 ? `\n用户提问环节：\n${questions.map((q, index) => `问题${index + 1}：${q.question}\n提问者：${q.asker_name}\n`).join('\n')}` : ''}
+
+════════════════════════════════════════
+由私人董事会系统生成`;
+        }
+
+        // 保存分享记录
+        await env.DB.prepare(`
+          INSERT INTO meeting_shares (id, meeting_id, share_type, title, content, summary, 
+                                    highlight_statements, view_count, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).bind(
+          shareId, meetingId, export_type || 'text', meeting.title, exportContent,
+          meeting.summary || '', JSON.stringify([]), 0,
+          new Date().toISOString(), new Date().toISOString()
+        ).run();
+
+        return new Response(JSON.stringify({
+          success: true,
+          data: {
+            share_id: shareId,
+            export_type: export_type || 'text',
+            content: exportContent,
+            meeting_info: {
+              title: meeting.title,
+              topic: meeting.topic,
+              statement_count: statements.length,
+              participant_count: participants.length,
+              question_count: questions.length
+            },
+            generated_at: new Date().toISOString()
+          }
+        }), { headers: corsHeaders });
+      }
+
       // 获取会议详情（包含参与者和发言）
       if (path.startsWith('/meetings/') && !path.includes('/', 10) && method === 'GET') {
         const meetingId = path.split('/')[2];
