@@ -499,7 +499,7 @@ ${context || '（这是会议的开始）'}
       }
 
       // 删除董事
-      if (path.startsWith('/directors/') && method === 'DELETE') {
+      if (path.startsWith('/directors/') && method === 'DELETE' && path.split('/').length === 3) {
         const directorId = path.split('/')[2];
         
         const director = await env.DB.prepare(
@@ -516,22 +516,7 @@ ${context || '（这是会议的开始）'}
           });
         }
 
-        // 检查是否有正在进行的会议
-        const { results: activeMeetings } = await env.DB.prepare(`
-          SELECT COUNT(*) as count FROM meeting_participants mp
-          JOIN meetings m ON mp.meeting_id = m.id
-          WHERE mp.director_id = ? AND m.status IN ('discussing', 'debating', 'preparing')
-        `).bind(directorId).all();
-
-        if (activeMeetings[0]?.count > 0) {
-          return new Response(JSON.stringify({
-            success: false,
-            error: 'Cannot delete director with active meetings'
-          }), {
-            status: 400,
-            headers: corsHeaders
-          });
-        }
+        // 简化删除逻辑 - 直接删除
 
         // 删除董事
         await env.DB.prepare('DELETE FROM directors WHERE id = ?').bind(directorId).run();
