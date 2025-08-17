@@ -1,0 +1,11 @@
+name = "dongshihui-api"
+main = "index.js"
+compatibility_date = "2024-01-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "dongshihui-db"
+database_id = "741c830e-ffcf-4231-b104-90af2d90da59"
+
+[env.production.vars]
+NODE_ENV = "production"
