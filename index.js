@@ -398,33 +398,34 @@ Return only JSON, no other text.`
           }
         }
 
+        // 获取用户问题
+        const { results: userQuestions } = await env.DB.prepare(`
+          SELECT * FROM user_questions WHERE meeting_id = ? ORDER BY created_at DESC LIMIT 3
+        `).bind(meetingId).all();
+
         // 构建对话上下文
         const recentStatements = statements.slice(0, 5).reverse();
         const context = recentStatements.map(s => {
           const speaker = participants.find(p => p.director_id === s.director_id);
-          if (s.content_type === 'user_question') {
-            return s.content; // 用户问题直接显示
-          }
           return `${speaker?.name || 'Unknown'}: ${s.content}`;
         }).join('\n\n');
 
         // 检查最近是否有用户提问需要回应
-        const latestUserQuestion = statements.find(s => s.content_type === 'user_question');
-        const hasRecentQuestion = latestUserQuestion && 
-          statements.filter(s => s.created_at > latestUserQuestion.created_at && s.director_id).length === 0;
+        const latestUserQuestion = userQuestions[0];
+        const hasRecentQuestion = latestUserQuestion && userQuestions.length > 0;
 
         // 调用Claude API生成发言
         let prompt;
         if (hasRecentQuestion) {
           // 如果有未回应的用户问题，重点回应
-          const questionContent = latestUserQuestion.content.replace(/【用户提问 - .*?】: /, '');
           prompt = `你是${nextDirector.name}，${nextDirector.title}。
 
 人设背景：${nextDirector.system_prompt}
 
 会议话题：${meeting.topic}
 
-刚才有用户提出了问题："${questionContent}"
+刚才有用户提出了问题："${latestUserQuestion.question}"
+提问者：${latestUserQuestion.asker_name}
 
 之前的讨论背景：
 ${context || '（这是会议的开始）'}
@@ -1676,8 +1677,26 @@ ${questions.length > 0 ? `\n用户提问环节：\n${questions.map((q, index) =>
           ORDER BY s.round_number, s.sequence_in_round
         `).bind(meetingId).all();
 
+        // 获取用户问题，也作为"发言"显示
+        const { results: userQuestions } = await env.DB.prepare(`
+          SELECT q.*, q.asker_name as director_name, '用户提问' as director_title, 
+                 null as director_avatar, q.created_at, 
+                 COALESCE((SELECT MAX(round_number) FROM statements WHERE meeting_id = ?), meeting.current_round) as round_number,
+                 999 as sequence_in_round,
+                 'user_question' as content_type,
+                 '【用户提问 - ' || q.asker_name || '】: ' || q.question as content
+          FROM user_questions q, meetings meeting
+          WHERE q.meeting_id = ? AND meeting.id = ?
+          ORDER BY q.created_at
+        `).bind(meetingId, meetingId, meetingId).all();
+
+        // 合并statements和用户问题，按时间排序
+        const allStatements = [...statements, ...userQuestions].sort((a, b) => {
+          return new Date(a.created_at) - new Date(b.created_at);
+        });
+
         // 为每个发言添加Director对象
-        const statementsWithDirector = statements.map(statement => ({
+        const statementsWithDirector = allStatements.map(statement => ({
           ...statement,
           Director: {
             name: statement.director_name,
