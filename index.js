@@ -1134,6 +1134,315 @@ ${context || '（这是会议的开始）'}
         }), { headers: corsHeaders });
       }
 
+      // 金句卡片生成API
+      if (path.startsWith('/statements/') && path.endsWith('/card') && method === 'GET') {
+        const statementId = path.split('/')[2];
+        
+        const statement = await env.DB.prepare(`
+          SELECT s.*, d.name as director_name, d.title as director_title, 
+                 d.avatar_url as director_avatar, d.era as director_era,
+                 m.title as meeting_title, m.topic as meeting_topic
+          FROM statements s
+          JOIN directors d ON s.director_id = d.id
+          JOIN meetings m ON s.meeting_id = m.id
+          WHERE s.id = ?
+        `).bind(statementId).first();
+
+        if (!statement) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: 'Statement not found'
+          }), {
+            status: 404,
+            headers: corsHeaders
+          });
+        }
+
+        // 使用Claude API提取关键词和情感分析
+        if (env.CLAUDE_API_KEY) {
+          try {
+            const analysisPrompt = `请分析以下发言内容，提取关键信息：
+
+发言内容："${statement.content}"
+发言人：${statement.director_name}（${statement.director_title}）
+
+请返回JSON格式的分析结果：
+{
+  "keywords": ["关键词1", "关键词2", "关键词3"],
+  "sentiment": "positive|neutral|negative",
+  "highlight_quote": "最精彩的一句话（30字以内）",
+  "theme_color": "#颜色代码（根据情感和内容推荐）",
+  "category": "智慧|争议|深度|启发|经典"
+}
+
+只返回JSON，不要其他内容。`;
+
+            const claudeResponse = await fetch('https://api.anthropic.com/v1/messages', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'x-api-key': env.CLAUDE_API_KEY,
+                'anthropic-version': '2023-06-01'
+              },
+              body: JSON.stringify({
+                model: 'claude-sonnet-4-20250514',
+                max_tokens: 300,
+                messages: [{
+                  role: 'user',
+                  content: analysisPrompt
+                }]
+              })
+            });
+
+            if (claudeResponse.ok) {
+              const claudeData = await claudeResponse.json();
+              let analysisResult = {};
+              
+              try {
+                let content = claudeData.content[0].text;
+                if (content.includes('```json')) {
+                  const match = content.match(/```json\s*([\s\S]*?)\s*```/);
+                  if (match) {
+                    content = match[1];
+                  }
+                }
+                analysisResult = JSON.parse(content);
+              } catch (e) {
+                analysisResult = {
+                  keywords: [],
+                  sentiment: 'neutral',
+                  highlight_quote: statement.content.substring(0, 30),
+                  theme_color: '#1976d2',
+                  category: '经典'
+                };
+              }
+
+              return new Response(JSON.stringify({
+                success: true,
+                data: {
+                  id: statement.id,
+                  content: statement.content,
+                  director: {
+                    name: statement.director_name,
+                    title: statement.director_title,
+                    avatar_url: statement.director_avatar,
+                    era: statement.director_era
+                  },
+                  meeting: {
+                    title: statement.meeting_title,
+                    topic: statement.meeting_topic
+                  },
+                  analysis: analysisResult,
+                  created_at: statement.created_at,
+                  round_number: statement.round_number
+                }
+              }), { headers: corsHeaders });
+            }
+          } catch (error) {
+            console.error('Claude analysis failed:', error);
+          }
+        }
+
+        // 如果Claude API不可用，返回基础数据
+        return new Response(JSON.stringify({
+          success: true,
+          data: {
+            id: statement.id,
+            content: statement.content,
+            director: {
+              name: statement.director_name,
+              title: statement.director_title,
+              avatar_url: statement.director_avatar,
+              era: statement.director_era
+            },
+            meeting: {
+              title: statement.meeting_title,
+              topic: statement.meeting_topic
+            },
+            analysis: {
+              keywords: [],
+              sentiment: 'neutral',
+              highlight_quote: statement.content.substring(0, 30),
+              theme_color: '#1976d2',
+              category: '经典'
+            },
+            created_at: statement.created_at,
+            round_number: statement.round_number
+          }
+        }), { headers: corsHeaders });
+      }
+
+      // 会议摘要生成API
+      if (path.startsWith('/meetings/') && path.endsWith('/summary') && method === 'POST') {
+        const meetingId = path.split('/')[2];
+        
+        const meeting = await env.DB.prepare(
+          'SELECT * FROM meetings WHERE id = ?'
+        ).bind(meetingId).first();
+
+        if (!meeting) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: 'Meeting not found'
+          }), {
+            status: 404,
+            headers: corsHeaders
+          });
+        }
+
+        // 获取所有发言和董事信息
+        const { results: statements } = await env.DB.prepare(`
+          SELECT s.*, d.name as director_name, d.title as director_title
+          FROM statements s
+          JOIN directors d ON s.director_id = d.id
+          WHERE s.meeting_id = ?
+          ORDER BY s.round_number, s.sequence_in_round
+        `).bind(meetingId).all();
+
+        if (statements.length === 0) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: 'No statements found in meeting'
+          }), {
+            status: 400,
+            headers: corsHeaders
+          });
+        }
+
+        // 构建发言内容
+        const discussionContent = statements.map((s, index) => 
+          `${index + 1}. ${s.director_name}（${s.director_title}）：\n${s.content}`
+        ).join('\n\n');
+
+        if (!env.CLAUDE_API_KEY) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: 'Claude API key not configured'
+          }), {
+            status: 500,
+            headers: corsHeaders
+          });
+        }
+
+        // 使用Claude API生成摘要
+        const summaryPrompt = `请为以下董事会会议生成专业摘要：
+
+会议标题：${meeting.title}
+讨论话题：${meeting.topic}
+参与董事：${statements.map(s => s.director_name).filter((name, index, arr) => arr.indexOf(name) === index).join('、')}
+总发言数：${statements.length}轮
+
+完整讨论内容：
+${discussionContent}
+
+请生成JSON格式的会议摘要：
+{
+  "executive_summary": "会议核心要点总结（150字以内）",
+  "key_points": ["要点1", "要点2", "要点3"],
+  "agreements": ["达成的共识点"],
+  "disagreements": ["争议分歧点"],
+  "insights": ["深度洞察和启发"],
+  "participant_highlights": [
+    {
+      "director": "董事姓名",
+      "key_contribution": "主要贡献观点"
+    }
+  ],
+  "next_steps": ["后续可探讨的方向"],
+  "rating": {
+    "depth": 8,
+    "controversy": 6,
+    "insight": 9
+  }
+}
+
+只返回JSON，不要其他内容。`;
+
+        try {
+          const claudeResponse = await fetch('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-api-key': env.CLAUDE_API_KEY,
+              'anthropic-version': '2023-06-01'
+            },
+            body: JSON.stringify({
+              model: 'claude-sonnet-4-20250514',
+              max_tokens: 1500,
+              messages: [{
+                role: 'user',
+                content: summaryPrompt
+              }]
+            })
+          });
+
+          if (!claudeResponse.ok) {
+            throw new Error(`Claude API failed: ${claudeResponse.status}`);
+          }
+
+          const claudeData = await claudeResponse.json();
+          let summaryResult = {};
+          
+          try {
+            let content = claudeData.content[0].text;
+            if (content.includes('```json')) {
+              const match = content.match(/```json\s*([\s\S]*?)\s*```/);
+              if (match) {
+                content = match[1];
+              }
+            }
+            summaryResult = JSON.parse(content);
+          } catch (e) {
+            summaryResult = {
+              executive_summary: '会议讨论了' + meeting.topic + '，各位董事发表了深度见解。',
+              key_points: ['讨论话题：' + meeting.topic],
+              agreements: [],
+              disagreements: [],
+              insights: [],
+              participant_highlights: [],
+              next_steps: [],
+              rating: { depth: 7, controversy: 5, insight: 7 }
+            };
+          }
+
+          // 更新会议摘要到数据库
+          await env.DB.prepare(`
+            UPDATE meetings 
+            SET summary = ?, key_points = ?, controversies = ?, metadata = ?, updated_at = ?
+            WHERE id = ?
+          `).bind(
+            summaryResult.executive_summary,
+            JSON.stringify(summaryResult.key_points),
+            JSON.stringify(summaryResult.disagreements),
+            JSON.stringify({ 
+              summary_generated: true,
+              ai_analysis: summaryResult,
+              tokens_used: claudeData.usage?.output_tokens || 0
+            }),
+            new Date().toISOString(),
+            meetingId
+          ).run();
+
+          return new Response(JSON.stringify({
+            success: true,
+            data: {
+              meeting_id: meetingId,
+              summary: summaryResult,
+              generated_at: new Date().toISOString()
+            }
+          }), { headers: corsHeaders });
+
+        } catch (error) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: 'Failed to generate summary: ' + error.message
+          }), {
+            status: 500,
+            headers: corsHeaders
+          });
+        }
+      }
+
       // 获取会议详情（包含参与者和发言）
       if (path.startsWith('/meetings/') && !path.includes('/', 10) && method === 'GET') {
         const meetingId = path.split('/')[2];
