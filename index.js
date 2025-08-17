@@ -498,6 +498,86 @@ ${context || '（这是会议的开始）'}
         }), { headers: corsHeaders });
       }
 
+      // 删除董事
+      if (path.startsWith('/directors/') && method === 'DELETE') {
+        const directorId = path.split('/')[2];
+        
+        const director = await env.DB.prepare(
+          'SELECT * FROM directors WHERE id = ?'
+        ).bind(directorId).first();
+
+        if (!director) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: 'Director not found'
+          }), {
+            status: 404,
+            headers: corsHeaders
+          });
+        }
+
+        // 检查是否有正在进行的会议
+        const { results: activeMeetings } = await env.DB.prepare(`
+          SELECT COUNT(*) as count FROM meeting_participants mp
+          JOIN meetings m ON mp.meeting_id = m.id
+          WHERE mp.director_id = ? AND m.status IN ('discussing', 'debating', 'preparing')
+        `).bind(directorId).all();
+
+        if (activeMeetings[0]?.count > 0) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: 'Cannot delete director with active meetings'
+          }), {
+            status: 400,
+            headers: corsHeaders
+          });
+        }
+
+        // 删除董事
+        await env.DB.prepare('DELETE FROM directors WHERE id = ?').bind(directorId).run();
+
+        return new Response(JSON.stringify({
+          success: true,
+          data: { message: 'Director deleted successfully' }
+        }), { headers: corsHeaders });
+      }
+
+      // 批量更新董事状态
+      if (path === '/directors/batch-status' && method === 'PATCH') {
+        const { director_ids, status, is_active } = await request.json();
+
+        if (!director_ids || !Array.isArray(director_ids)) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: 'director_ids array is required'
+          }), {
+            status: 400,
+            headers: corsHeaders
+          });
+        }
+
+        let updateCount = 0;
+        for (const directorId of director_ids) {
+          const result = await env.DB.prepare(`
+            UPDATE directors 
+            SET status = ?, is_active = ?, updated_at = ?
+            WHERE id = ?
+          `).bind(
+            status || 'active',
+            is_active !== undefined ? (is_active ? 1 : 0) : 1,
+            new Date().toISOString(),
+            directorId
+          ).run();
+          
+          if (result.success) updateCount++;
+        }
+
+        return new Response(JSON.stringify({
+          success: true,
+          data: { updated_count: updateCount }
+        }), { headers: corsHeaders });
+      }
+
       // 获取会议详情（包含参与者和发言）
       if (path.startsWith('/meetings/') && !path.includes('/', 10) && method === 'GET') {
         const meetingId = path.split('/')[2];
