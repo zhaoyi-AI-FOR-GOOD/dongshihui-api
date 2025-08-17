@@ -627,57 +627,20 @@ ${context || '（这是会议的开始）'}
           });
         }
 
-        // 获取当前轮次和发言顺序
-        const { results: statements } = await env.DB.prepare(`
-          SELECT * FROM statements 
-          WHERE meeting_id = ? 
-          ORDER BY round_number DESC, sequence_in_round DESC
-          LIMIT 1
-        `).bind(meetingId).all();
-
-        let roundNumber = meeting.current_round;
-        let sequenceInRound = 1;
-        
-        if (statements.length > 0) {
-          const lastStatement = statements[0];
-          roundNumber = lastStatement.round_number;
-          sequenceInRound = lastStatement.sequence_in_round + 1;
-        }
-
-        // 将用户问题作为特殊的statement保存到会议记录中
-        const statementId = crypto.randomUUID();
-        await env.DB.prepare(`
-          INSERT INTO statements (id, meeting_id, director_id, content, round_number, 
-                                sequence_in_round, content_type, tokens_used, claude_model, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).bind(
-          statementId, meetingId, null, `【用户提问 - ${asker_name || '用户'}】: ${question}`,
-          roundNumber, sequenceInRound, 'user_question', 0, 'user_input',
-          new Date().toISOString(), new Date().toISOString()
-        ).run();
-
-        // 同时保存到user_questions表用于详细管理
+        // 保存用户问题
         const questionId = crypto.randomUUID();
         await env.DB.prepare(`
-          INSERT INTO user_questions (id, meeting_id, question, asker_name, question_type, statement_id, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          INSERT INTO user_questions (id, meeting_id, question, asker_name, question_type, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
         `).bind(
           questionId, meetingId, question, asker_name || '用户',
-          question_type || 'general', statementId, new Date().toISOString(), new Date().toISOString()
+          question_type || 'general', new Date().toISOString(), new Date().toISOString()
         ).run();
-
-        // 更新会议统计
-        await env.DB.prepare(`
-          UPDATE meetings 
-          SET total_statements = total_statements + 1, updated_at = ?
-          WHERE id = ?
-        `).bind(new Date().toISOString(), meetingId).run();
 
         return new Response(JSON.stringify({
           success: true,
           data: { 
             id: questionId, 
-            statement_id: statementId,
             question, 
             asker_name: asker_name || '用户',
             status: 'pending' 
