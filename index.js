@@ -2226,7 +2226,7 @@ ${allStatements.map((record, index) => {
             d.name as director_name,
             d.title as director_title,
             d.avatar_url as director_avatar,
-            COALESCE((SELECT MAX(round_number) FROM statements WHERE meeting_id = ?), meeting.current_round) as round_number,
+            COALESCE((SELECT MAX(round_number) FROM statements WHERE meeting_id = ?), 1) as round_number,
             (1000 + qr.response_order) as sequence_in_round,
             'question_response' as content_type,
             qr.content as content
