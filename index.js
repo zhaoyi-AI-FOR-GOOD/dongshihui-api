@@ -355,13 +355,56 @@ Return only JSON, no other text.`
       }
 
       if (path === '/meetings' && method === 'GET') {
-        const { results } = await env.DB.prepare(
-          'SELECT * FROM meetings ORDER BY created_at DESC LIMIT 50'
-        ).all();
+        const url = new URL(request.url);
+        const status = url.searchParams.get('status');
+        const limit = parseInt(url.searchParams.get('limit')) || 20;
+        const offset = parseInt(url.searchParams.get('offset')) || 0;
+        const search = url.searchParams.get('search');
+
+        let query = 'SELECT * FROM meetings WHERE 1=1';
+        let params = [];
+
+        if (status && status !== 'all') {
+          query += ' AND status = ?';
+          params.push(status);
+        }
+
+        if (search) {
+          query += ' AND (title LIKE ? OR topic LIKE ?)';
+          params.push(`%${search}%`, `%${search}%`);
+        }
+
+        query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
+        params.push(limit, offset);
+
+        const { results } = await env.DB.prepare(query).bind(...params).all();
+
+        // 获取总数用于分页
+        let countQuery = 'SELECT COUNT(*) as total FROM meetings WHERE 1=1';
+        let countParams = [];
+
+        if (status && status !== 'all') {
+          countQuery += ' AND status = ?';
+          countParams.push(status);
+        }
+
+        if (search) {
+          countQuery += ' AND (title LIKE ? OR topic LIKE ?)';
+          countParams.push(`%${search}%`, `%${search}%`);
+        }
+
+        const { results: countResult } = await env.DB.prepare(countQuery).bind(...countParams).all();
+        const total = countResult[0]?.total || 0;
 
         return new Response(JSON.stringify({
           success: true,
-          data: results
+          data: results,
+          pagination: {
+            total,
+            limit,
+            offset,
+            hasMore: offset + limit < total
+          }
         }), { headers: corsHeaders });
       }
 
