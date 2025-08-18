@@ -1663,6 +1663,9 @@ ${context || '（这是会议的开始）'}${modeSpecificContext}
           WHERE s.meeting_id = ?
         `).bind(meetingId).all();
 
+        // 统计董事发言数量（用于显示）
+        const statementCount = discussionData.filter(item => item.type === 'statement').length;
+
         if (!env.CLAUDE_API_KEY) {
           return new Response(JSON.stringify({
             success: false,
@@ -1679,7 +1682,7 @@ ${context || '（这是会议的开始）'}${modeSpecificContext}
 会议标题：${meeting.title}
 讨论话题：${meeting.topic}
 参与董事：${participantDirectors.map(d => d.name).join('、')}
-总讨论数：${discussionData.length}条（包含董事发言和用户问题）
+总发言数：${statementCount}轮，用户问题：${discussionData.length - statementCount}个
 
 完整讨论内容：
 ${discussionContent}
