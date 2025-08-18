@@ -1843,39 +1843,75 @@ meeting.discussion_mode === 'focus' ?
           'free': '自由发言模式'
         }[meeting.discussion_mode] || '讨论模式';
 
-        const summaryPrompt = `请为以下${modeDescription}董事会会议生成详细专业摘要：
+        const summaryPrompt = `作为专业的会议分析师，请对以下${modeDescription}董事会会议进行深度智能分析：
 
+【会议基本信息】
 会议标题：${meeting.title}
 讨论话题：${meeting.topic}
 讨论模式：${modeDescription}
 参与董事：${statements.map(s => s.director_name).filter((name, index, arr) => arr.indexOf(name) === index).join('、')}
-总发言数：${statements.length}轮${userQuestions.length > 0 ? `，用户问题：${userQuestions.length}个` : ''}
+总发言轮数：${statements.length}轮${userQuestions.length > 0 ? `，用户互动问题：${userQuestions.length}个` : ''}
 
-完整讨论内容：
+【完整讨论记录】
 ${discussionContent}
 
-请深入分析所有发言内容，生成丰富详细的JSON格式会议摘要：
+【分析任务】
+请基于以上完整发言记录，从以下7个维度进行专业分析，生成高质量会议智能摘要：
+
+1. **执行摘要分析**：提炼会议核心议题、主要观点冲突、形成的重要结论，体现讨论的价值和意义
+2. **关键要点提取**：识别每个重要观点，包含提出者、核心逻辑、支撑论据，避免重复和空话
+3. **共识识别**：寻找董事们明确表达认同或达成一致的观点，引用具体表述
+4. **分歧映射**：识别董事间的观点冲突、价值观差异、方法论争议，分析分歧根源
+5. **深度洞察挖掘**：发现讨论中体现的深层思维模式、跨领域连接、意外启发、方法论创新
+6. **个人贡献突出**：分析每位董事的独特视角、专业价值、思维特色、核心贡献
+7. **后续探讨指向**：基于当前讨论的不足和延伸点，提出有价值的深入方向
+
+【输出要求】
+严格按照以下JSON格式输出，每个字段都必须基于实际发言内容，避免空泛和重复：
+
 {
-  "executive_summary": "会议核心要点详细总结，包含主要观点、争议焦点和重要结论（200-300字）",
-  "key_points": ["从实际发言中提取的关键要点，要具体详细"],
-  "agreements": ["董事们达成的共识点，引用具体观点"],
-  "disagreements": ["董事间的争议分歧，说明不同观点"],
-  "insights": ["从讨论中发现的深度洞察和启发"],
+  "executive_summary": "基于实际讨论，总结核心议题、主要观点冲突、重要结论，体现讨论价值（250-350字）",
+  "key_points": [
+    "具体要点1：[提出者]的核心观点+论据摘要（避免重复标题信息）",
+    "具体要点2：[提出者]的核心观点+论据摘要",
+    "具体要点3：[提出者]的核心观点+论据摘要（至少5-8个要点）"
+  ],
+  "agreements": [
+    "明确共识1：董事们在X议题上的一致观点，引用关键表述",
+    "明确共识2：体现价值观或方法论的共同认知（如无明确共识可为空）"
+  ],
+  "disagreements": [
+    "核心分歧1：[董事A]vs[董事B]在X问题上的观点冲突，分析分歧实质", 
+    "核心分歧2：不同董事在方法论或价值观上的差异（如无明显分歧可为空）"
+  ],
+  "insights": [
+    "深度洞察1：发现的跨领域连接或创新思维模式",
+    "深度洞察2：体现的深层哲学思考或方法论启发",
+    "深度洞察3：意外的观点碰撞或认知突破（至少3-5个洞察）"
+  ],
   "participant_highlights": [
     {
-      "director": "董事姓名",
-      "key_contribution": "该董事的核心观点和独特贡献，要详细具体"
+      "director": "董事全名",
+      "key_contribution": "该董事的独特视角+专业价值+核心论点+思维特色，具体详细（80-120字）"
     }
   ],
-  "next_steps": ["基于讨论内容提出的后续探讨方向"],
+  "next_steps": [
+    "深入方向1：基于当前讨论不足，值得进一步探讨的具体议题",
+    "深入方向2：可以延伸的跨领域思考或实践方向",
+    "深入方向3：需要补充的视角或未充分论述的要点（3-5个方向）"
+  ],
   "rating": {
-    "depth": 8,
-    "controversy": 6,
-    "insight": 9
+    "depth": "讨论深度评分(1-10)，基于论证深度和思维层次",
+    "controversy": "争议程度评分(1-10)，基于观点分歧和辩论激烈程度", 
+    "insight": "洞察价值评分(1-10)，基于创新思维和启发价值"
   }
 }
 
-要求：基于实际发言内容生成丰富详细的摘要，每个字段都要有实质性内容。只返回JSON格式。`;
+【重要提醒】
+- 必须基于实际发言内容进行分析，不能编造或泛化
+- 每个字段都要有实质性内容，避免重复会议基本信息
+- 引用董事观点时要准确，体现其思维特色
+- 只返回标准JSON格式，不包含任何其他文字`;
 
         try {
           const claudeResponse = await fetch('https://api.anthropic.com/v1/messages', {
@@ -1887,7 +1923,7 @@ ${discussionContent}
             },
             body: JSON.stringify({
               model: 'claude-sonnet-4-20250514',
-              max_tokens: 1500,
+              max_tokens: 3000,
               messages: [{
                 role: 'user',
                 content: summaryPrompt
