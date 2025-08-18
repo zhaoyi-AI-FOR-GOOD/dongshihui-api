@@ -1625,14 +1625,14 @@ ${context || '（这是会议的开始）'}${modeSpecificContext}
 
         // 获取所有发言记录和用户问题，按时间顺序合并
         const { results: discussionData } = await env.DB.prepare(`
-          SELECT content, created_at, 'statement' as type, d.name as speaker_name, d.title as speaker_title
+          SELECT content, s.created_at, 'statement' as type, d.name as speaker_name, d.title as speaker_title
           FROM statements s 
           JOIN directors d ON s.director_id = d.id 
           WHERE s.meeting_id = ?
           UNION ALL
-          SELECT question as content, created_at, 'user_question' as type, asker_name as speaker_name, NULL as speaker_title
-          FROM user_questions 
-          WHERE meeting_id = ?
+          SELECT question as content, uq.created_at, 'user_question' as type, asker_name as speaker_name, NULL as speaker_title
+          FROM user_questions uq
+          WHERE uq.meeting_id = ?
           ORDER BY created_at
         `).bind(meetingId, meetingId).all();
 
