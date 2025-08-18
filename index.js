@@ -1950,6 +1950,49 @@ ${allStatements.map((record, index) => {
         }), { headers: corsHeaders });
       }
 
+      // 删除会议
+      if (path.startsWith('/meetings/') && !path.includes('/', 10) && method === 'DELETE') {
+        const meetingId = path.split('/')[2];
+        
+        const meeting = await env.DB.prepare(
+          'SELECT * FROM meetings WHERE id = ?'
+        ).bind(meetingId).first();
+
+        if (!meeting) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: 'Meeting not found'
+          }), {
+            status: 404,
+            headers: corsHeaders
+          });
+        }
+
+        try {
+          // 删除相关的所有记录（按照外键依赖顺序）
+          await env.DB.prepare('DELETE FROM question_responses WHERE question_id IN (SELECT id FROM user_questions WHERE meeting_id = ?)').bind(meetingId).run();
+          await env.DB.prepare('DELETE FROM user_questions WHERE meeting_id = ?').bind(meetingId).run();
+          await env.DB.prepare('DELETE FROM user_favorites WHERE statement_id IN (SELECT id FROM statements WHERE meeting_id = ?)').bind(meetingId).run();
+          await env.DB.prepare('DELETE FROM statements WHERE meeting_id = ?').bind(meetingId).run();
+          await env.DB.prepare('DELETE FROM meeting_participants WHERE meeting_id = ?').bind(meetingId).run();
+          await env.DB.prepare('DELETE FROM meeting_shares WHERE meeting_id = ?').bind(meetingId).run();
+          await env.DB.prepare('DELETE FROM meetings WHERE id = ?').bind(meetingId).run();
+
+          return new Response(JSON.stringify({
+            success: true,
+            data: { message: 'Meeting deleted successfully' }
+          }), { headers: corsHeaders });
+        } catch (error) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: 'Failed to delete meeting: ' + error.message
+          }), {
+            status: 500,
+            headers: corsHeaders
+          });
+        }
+      }
+
       // 获取会议详情（包含参与者和发言）
       if (path.startsWith('/meetings/') && !path.includes('/', 10) && method === 'GET') {
         const meetingId = path.split('/')[2];
