@@ -2214,8 +2214,31 @@ ${allStatements.map((record, index) => {
           ORDER BY q.created_at
         `).bind(meetingId, meetingId, meetingId).all();
 
-        // 合并statements和用户问题，按时间排序
-        const allStatements = [...statements, ...userQuestions].sort((a, b) => {
+        // 获取董事对用户提问的回复，也作为"发言"显示
+        const { results: questionResponses } = await env.DB.prepare(`
+          SELECT 
+            qr.id,
+            q.meeting_id,
+            qr.director_id,
+            qr.content,
+            qr.created_at,
+            qr.updated_at,
+            d.name as director_name,
+            d.title as director_title,
+            d.avatar_url as director_avatar,
+            COALESCE((SELECT MAX(round_number) FROM statements WHERE meeting_id = ?), meeting.current_round) as round_number,
+            (1000 + qr.response_order) as sequence_in_round,
+            'question_response' as content_type,
+            qr.content as content
+          FROM question_responses qr
+          JOIN user_questions q ON qr.question_id = q.id
+          JOIN directors d ON qr.director_id = d.id
+          WHERE q.meeting_id = ?
+          ORDER BY qr.created_at
+        `).bind(meetingId, meetingId).all();
+
+        // 合并statements、用户问题和董事回复，按时间排序
+        const allStatements = [...statements, ...userQuestions, ...questionResponses].sort((a, b) => {
           return new Date(a.created_at) - new Date(b.created_at);
         });
 
