@@ -1114,10 +1114,31 @@ meeting.discussion_mode === 'focus' ?
           });
         }
 
-        // 为每个董事生成回应
+        // 根据问题类型确定哪些董事应该回应
+        let targetDirectors = [];
+        if (question.target_director_id) {
+          // 指定董事提问：只有指定的董事回应
+          const targetDirector = participants.find(p => p.id === question.target_director_id);
+          if (targetDirector) {
+            targetDirectors = [targetDirector];
+          } else {
+            return new Response(JSON.stringify({
+              success: false,
+              error: 'Target director not found in meeting participants'
+            }), {
+              status: 400,
+              headers: corsHeaders
+            });
+          }
+        } else {
+          // 全员提问：所有董事回应
+          targetDirectors = participants;
+        }
+
+        // 为确定的董事生成回应
         const responses = [];
-        for (let i = 0; i < participants.length; i++) {
-          const director = participants[i];
+        for (let i = 0; i < targetDirectors.length; i++) {
+          const director = targetDirectors[i];
           
           const prompt = `你是${director.name}，${director.title}。
 
