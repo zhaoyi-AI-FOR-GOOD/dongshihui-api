@@ -538,38 +538,37 @@ Return only JSON, no other text.`
             break;
             
           case 'debate':
-            // 辩论模式：正反方交替，支持反驳
+            // 辩论模式：确保所有董事都能轮流参与辩论
             if (statements.length === 0) {
               nextDirector = participants[0]; // 正方先发言
             } else {
-              const lastStatement = statements[0];
-              const lastDirectorIndex = participants.findIndex(p => p.director_id === lastStatement.director_id);
-              const isLastProSide = lastDirectorIndex % 2 === 0;
-              
-              // 如果刚好是完整回合，开始新回合
+              // 如果当前轮次所有人都发言了，开始新回合
               if (currentRoundStatements.length >= participants.length) {
                 roundNumber++;
                 sequenceInRound = 1;
                 nextDirector = participants[0];
               } else {
-                // 反方回应或继续辩论
-                const availableOpponents = participants.filter((p, idx) => {
-                  const hasSpokenThisRound = currentRoundStatements.some(s => s.director_id === p.director_id);
-                  const isOpponentSide = isLastProSide ? (idx % 2 === 1) : (idx % 2 === 0);
-                  return !hasSpokenThisRound && isOpponentSide;
+                // 找出本轮还没发言的所有董事
+                const availableDirectors = participants.filter(p => {
+                  return !currentRoundStatements.some(s => s.director_id === p.director_id);
                 });
                 
-                if (availableOpponents.length > 0) {
-                  nextDirector = availableOpponents[0];
+                if (availableDirectors.length > 0) {
+                  // 选择下一个还没发言的董事（按索引顺序轮流）
+                  const lastStatement = statements[0];
+                  const lastDirectorIndex = participants.findIndex(p => p.director_id === lastStatement.director_id);
+                  
+                  // 从上一位发言者的下一位开始找，确保轮流
+                  let nextIndex = (lastDirectorIndex + 1) % participants.length;
+                  while (!availableDirectors.find(p => p.director_id === participants[nextIndex].director_id)) {
+                    nextIndex = (nextIndex + 1) % participants.length;
+                  }
+                  
+                  nextDirector = participants[nextIndex];
                   isRebuttal = true;
                 } else {
-                  // 没有对方可以回应，选择己方未发言的
-                  const availableSameSide = participants.filter((p, idx) => {
-                    const hasSpokenThisRound = currentRoundStatements.some(s => s.director_id === p.director_id);
-                    const isSameSide = isLastProSide ? (idx % 2 === 0) : (idx % 2 === 1);
-                    return !hasSpokenThisRound && isSameSide;
-                  });
-                  nextDirector = availableSameSide[0] || participants[0];
+                  // 保底逻辑
+                  nextDirector = participants[0];
                 }
                 sequenceInRound = currentRoundStatements.length + 1;
               }
