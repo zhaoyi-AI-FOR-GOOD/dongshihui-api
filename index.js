@@ -1623,29 +1623,45 @@ ${context || '（这是会议的开始）'}${modeSpecificContext}
           });
         }
 
-        // 获取所有发言和董事信息
-        const { results: statements } = await env.DB.prepare(`
-          SELECT s.*, d.name as director_name, d.title as director_title
-          FROM statements s
-          JOIN directors d ON s.director_id = d.id
+        // 获取所有发言记录和用户问题，按时间顺序合并
+        const { results: discussionData } = await env.DB.prepare(`
+          SELECT content, created_at, 'statement' as type, d.name as speaker_name, d.title as speaker_title
+          FROM statements s 
+          JOIN directors d ON s.director_id = d.id 
           WHERE s.meeting_id = ?
-          ORDER BY s.round_number, s.sequence_in_round
-        `).bind(meetingId).all();
+          UNION ALL
+          SELECT question as content, created_at, 'user_question' as type, asker_name as speaker_name, NULL as speaker_title
+          FROM user_questions 
+          WHERE meeting_id = ?
+          ORDER BY created_at
+        `).bind(meetingId, meetingId).all();
 
-        if (statements.length === 0) {
+        if (discussionData.length === 0) {
           return new Response(JSON.stringify({
             success: false,
-            error: 'No statements found in meeting'
+            error: 'No discussion content found in meeting'
           }), {
             status: 400,
             headers: corsHeaders
           });
         }
 
-        // 构建发言内容
-        const discussionContent = statements.map((s, index) => 
-          `${index + 1}. ${s.director_name}（${s.director_title}）：\n${s.content}`
-        ).join('\n\n');
+        // 构建完整讨论内容（包含董事发言和用户问题）
+        const discussionContent = discussionData.map((item, index) => {
+          if (item.type === 'statement') {
+            return `${index + 1}. ${item.speaker_name}（${item.speaker_title}）：\n${item.content}`;
+          } else {
+            return `${index + 1}. 用户提问（${item.speaker_name}）：\n${item.content}`;
+          }
+        }).join('\n\n');
+
+        // 获取参与董事列表用于摘要
+        const { results: participantDirectors } = await env.DB.prepare(`
+          SELECT DISTINCT d.name, d.title
+          FROM statements s 
+          JOIN directors d ON s.director_id = d.id 
+          WHERE s.meeting_id = ?
+        `).bind(meetingId).all();
 
         if (!env.CLAUDE_API_KEY) {
           return new Response(JSON.stringify({
@@ -1662,8 +1678,8 @@ ${context || '（这是会议的开始）'}${modeSpecificContext}
 
 会议标题：${meeting.title}
 讨论话题：${meeting.topic}
-参与董事：${statements.map(s => s.director_name).filter((name, index, arr) => arr.indexOf(name) === index).join('、')}
-总发言数：${statements.length}轮
+参与董事：${participantDirectors.map(d => d.name).join('、')}
+总讨论数：${discussionData.length}条（包含董事发言和用户问题）
 
 完整讨论内容：
 ${discussionContent}
