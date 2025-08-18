@@ -661,11 +661,14 @@ Return only JSON, no other text.`
 ${context || '（这是会议的开始）'}
 
 请根据你的人设特点和专业领域，在${meeting.discussion_mode}模式下回应这个用户问题。回应应该：
-1. 直接针对用户的问题给出你的观点
-2. 体现你的历史背景和专业领域
-3. 保持你独特的说话风格
-4. 符合当前讨论模式的特点
-5. 长度控制在100-300字
+1. 从你的历史背景和价值观出发，给出真实的观点立场
+2. 如果与你的信念冲突，可以礼貌但坚定地提出不同看法
+3. 体现你的专业领域和时代特色，不必迎合当代观点
+4. 保持你独特的说话风格和思维方式
+5. 符合当前讨论模式的特点，可以与其他董事观点相左
+6. 长度控制在100-300字
+
+重要：请基于你的真实人设立场回应，而非简单迎合用户观点。你是独立的思考者。
 
 请直接返回回应内容，不要包含任何格式标记。`;
         } else {
@@ -677,22 +680,22 @@ ${context || '（这是会议的开始）'}
               const lastStatement = statements[0];
               if (isRebuttal && lastStatement) {
                 const lastDirector = participants.find(p => p.director_id === lastStatement.director_id);
-                modeSpecificContext = `\n\n【需要反驳的观点】\n${lastDirector?.name}刚才说："${lastStatement.content}"\n\n请针对这个观点进行有力的反驳。`;
+                modeSpecificContext = `\n\n【需要反驳的观点】\n${lastDirector?.name}刚才说："${lastStatement.content}"\n\n请从你的价值观和专业角度，对这个观点进行有力的反驳。不要为了和谐而妥协你的立场。`;
               } else {
-                modeSpecificContext = '\n\n请明确表达你的立场，为即将到来的辩论做好准备。';
+                modeSpecificContext = '\n\n请明确表达你的立场，准备为你的观点进行辩护。不要试图取悦所有人。';
               }
               break;
               
             case 'focus':
-              modeSpecificContext = `\n\n这是第${roundNumber}层讨论，请比前面的讨论更加深入和具体。`;
+              modeSpecificContext = `\n\n这是第${roundNumber}层讨论。基于你的专业背景，提出可能被忽视的角度或挑战现有观点。`;
               break;
               
             case 'free':
-              modeSpecificContext = '\n\n你可以自由选择感兴趣的话题角度进行发言。';
+              modeSpecificContext = '\n\n你可以自由表达，包括对之前发言的质疑或不同看法。展现你的独特视角。';
               break;
               
             default:
-              modeSpecificContext = '\n\n请按照轮流发言的秩序，有条理地表达观点。';
+              modeSpecificContext = '\n\n按轮流秩序发言，但要保持你的独立观点，不必与他人观点保持一致。';
           }
           
           prompt = `你是${nextDirector.name}，${nextDirector.title}。
@@ -706,11 +709,14 @@ ${context || '（这是会议的开始）'}
 ${context || '（这是会议的开始）'}${modeSpecificContext}
 
 请根据你的人设特点，在${meeting.discussion_mode}模式下针对当前话题发表你的观点。回应应该：
-1. 体现你的历史背景和专业领域
-2. 与之前的讨论内容相关
-3. 保持你独特的说话风格
-4. 符合当前讨论模式的特点
-5. 长度控制在100-300字
+1. 基于你的历史背景、价值观和专业领域形成独立立场
+2. 可以与之前的讨论相关，但不必盲从他人观点
+3. 保持你独特的说话风格和思维局限性
+4. 如果与其他董事观点冲突，坚持你的立场
+5. 符合当前讨论模式的特点，敢于表达争议观点
+6. 长度控制在100-300字
+
+重要：你是历史人物，有自己时代的局限性和固有偏见。保持真实的人设，不要为了现代政治正确而改变立场。
 
 请直接返回发言内容，不要包含任何格式标记。`;
         }
@@ -1002,10 +1008,13 @@ ${context || '（这是会议的开始）'}${modeSpecificContext}
 有用户在会议中提出了问题："${question.question}"
 
 请根据你的人设特点和专业领域，简洁地回应这个问题。回应应该：
-1. 体现你的历史背景和观点立场
-2. 保持你独特的说话风格
-3. 长度控制在50-150字
-4. 直接回答问题，不要过度解释
+1. 基于你的历史背景和核心价值观给出真实立场
+2. 如果问题与你的信念或时代背景冲突，可以表达不同观点
+3. 保持你独特的说话风格和思维方式
+4. 不必迎合用户期望，坚持你的人设特色
+5. 长度控制在50-150字
+
+重要：你是独立的历史人物，有自己的立场和局限性。
 
 请直接返回回应内容，不要包含任何格式标记。`;
 
