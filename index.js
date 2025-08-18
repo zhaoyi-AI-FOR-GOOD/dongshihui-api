@@ -620,15 +620,35 @@ Return only JSON, no other text.`
             nextDirector = participants[0];
         }
 
-        // 获取用户问题，优先处理定向提问
-        const { results: userQuestions } = await env.DB.prepare(`
-          SELECT uq.*, d.name as target_director_name 
-          FROM user_questions uq
-          LEFT JOIN directors d ON uq.target_director_id = d.id
-          WHERE uq.meeting_id = ? 
-          ORDER BY uq.created_at DESC 
-          LIMIT 5
-        `).bind(meetingId).all();
+        // 获取用户问题，优先处理定向提问 - 兼容旧表结构
+        let userQuestions = [];
+        try {
+          // 尝试使用新的表结构查询
+          const { results } = await env.DB.prepare(`
+            SELECT uq.*, d.name as target_director_name 
+            FROM user_questions uq
+            LEFT JOIN directors d ON uq.target_director_id = d.id
+            WHERE uq.meeting_id = ? 
+            ORDER BY uq.created_at DESC 
+            LIMIT 5
+          `).bind(meetingId).all();
+          userQuestions = results;
+        } catch (newQueryError) {
+          console.log('使用新表结构查询失败，降级到旧结构...');
+          // 降级到旧的表结构查询
+          const { results } = await env.DB.prepare(`
+            SELECT * FROM user_questions 
+            WHERE meeting_id = ? 
+            ORDER BY created_at DESC 
+            LIMIT 5
+          `).bind(meetingId).all();
+          userQuestions = results.map(q => ({
+            ...q,
+            target_director_id: null,
+            question_scope: 'all',
+            target_director_name: null
+          }));
+        }
 
         // 构建对话上下文
         const recentStatements = statements.slice(0, 5).reverse();
@@ -644,7 +664,9 @@ Return only JSON, no other text.`
         );
         
         // 检查是否有需要全员回答的问题
-        const allDirectorQuestion = userQuestions.find(q => q.question_scope === 'all');
+        const allDirectorQuestion = userQuestions.find(q => 
+          (q.question_scope === 'all') || (!q.question_scope) // 兼容旧数据
+        );
         
         const latestUserQuestion = targetedQuestion || allDirectorQuestion || userQuestions[0];
         const hasRecentQuestion = latestUserQuestion && userQuestions.length > 0;
@@ -955,16 +977,48 @@ meeting.discussion_mode === 'focus' ?
           });
         }
 
-        // 保存用户问题
+        // 保存用户问题 - 兼容旧数据库结构
         const questionId = crypto.randomUUID();
-        await env.DB.prepare(`
-          INSERT INTO user_questions (id, meeting_id, question, asker_name, target_director_id, question_scope, question_type, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).bind(
-          questionId, meetingId, question, asker_name || '用户',
-          target_director_id || null, question_scope || 'all',
-          question_type || 'general', new Date().toISOString(), new Date().toISOString()
-        ).run();
+        
+        try {
+          // 尝试使用新的表结构
+          await env.DB.prepare(`
+            INSERT INTO user_questions (id, meeting_id, question, asker_name, target_director_id, question_scope, question_type, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).bind(
+            questionId, meetingId, question, asker_name || '用户',
+            target_director_id || null, question_scope || 'all',
+            question_type || 'general', new Date().toISOString(), new Date().toISOString()
+          ).run();
+        } catch (newStructureError) {
+          console.log('新表结构不存在，尝试创建字段...');
+          
+          // 尝试添加新字段
+          try {
+            await env.DB.prepare(`ALTER TABLE user_questions ADD COLUMN target_director_id TEXT NULL`).run();
+            await env.DB.prepare(`ALTER TABLE user_questions ADD COLUMN question_scope TEXT DEFAULT 'all'`).run();
+            
+            // 再次尝试插入
+            await env.DB.prepare(`
+              INSERT INTO user_questions (id, meeting_id, question, asker_name, target_director_id, question_scope, question_type, created_at, updated_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `).bind(
+              questionId, meetingId, question, asker_name || '用户',
+              target_director_id || null, question_scope || 'all',
+              question_type || 'general', new Date().toISOString(), new Date().toISOString()
+            ).run();
+          } catch (alterError) {
+            console.log('添加字段失败，使用旧表结构...');
+            // 降级到旧的表结构
+            await env.DB.prepare(`
+              INSERT INTO user_questions (id, meeting_id, question, asker_name, question_type, created_at, updated_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?)
+            `).bind(
+              questionId, meetingId, question, asker_name || '用户',
+              question_type || 'general', new Date().toISOString(), new Date().toISOString()
+            ).run();
+          }
+        }
 
         return new Response(JSON.stringify({
           success: true,
@@ -972,6 +1026,8 @@ meeting.discussion_mode === 'focus' ?
             id: questionId, 
             question, 
             asker_name: asker_name || '用户',
+            question_scope: question_scope || 'all',
+            target_director_id: target_director_id || null,
             status: 'pending' 
           }
         }), { headers: corsHeaders });
