@@ -1684,41 +1684,62 @@ ${context || '（这是会议的开始）'}${modeSpecificContext}
           'free': '自由发言模式'
         }[meeting.discussion_mode] || '讨论模式';
 
-        const summaryPrompt = `请为以下${modeDescription}的董事会会议生成专业摘要：
+        const summaryPrompt = `你是一位专业的董事会会议分析师，请为以下${modeDescription}的董事会会议生成深度分析摘要：
 
+# 会议基本信息
 会议标题：${meeting.title}
 讨论话题：${meeting.topic}
 讨论模式：${modeDescription}
 参与董事：${statements.map(s => s.director_name).filter((name, index, arr) => arr.indexOf(name) === index).join('、')}
 总发言数：${statements.length}轮
-${userQuestions.length > 0 ? `用户问题：${userQuestions.length}个` : ''}
+${userQuestions.length > 0 ? `用户互动：${userQuestions.length}个问题` : ''}
 
-完整讨论内容：
+# 完整会议记录
 ${discussionContent}
 
-请仔细分析以上内容，生成详细的JSON格式会议摘要。确保所有字段都有实质内容：
+# 分析任务
+请深度分析以上会议内容，提取关键信息并生成结构化摘要。注意：
+1. 仔细阅读每位董事的具体发言内容
+2. 识别观点的逻辑层次和论证结构  
+3. 捕捉不同董事间的观点交锋和呼应
+4. 发现讨论中的深层洞察和创新思路
+5. 评估讨论质量的多个维度
+
+请返回以下JSON格式的专业分析报告：
 
 {
-  "executive_summary": "根据实际讨论内容生成的会议核心要点总结（150-200字）",
-  "key_points": ["从实际发言中提取的关键要点（至少3个）"],
-  "agreements": ["从讨论中识别出的共识点"],
-  "disagreements": ["从讨论中识别出的争议分歧点"],
-  "insights": ["从讨论中发现的深度洞察和启发"],
+  "executive_summary": "基于实际发言内容的会议核心要点总结，涵盖主要观点、争议焦点和结论方向（150-250字）",
+  "key_points": [
+    "从董事发言中提炼的关键观点1",
+    "从董事发言中提炼的关键观点2", 
+    "从董事发言中提炼的关键观点3"
+  ],
+  "agreements": [
+    "董事们达成共识的具体观点"
+  ],
+  "disagreements": [
+    "董事间存在分歧的具体争议点"
+  ],
+  "insights": [
+    "从讨论中发现的深层洞察和启发性观点"
+  ],
   "participant_highlights": [
     {
-      "director": "实际参与的董事姓名",
-      "key_contribution": "该董事的主要观点贡献"
+      "director": "董事姓名",
+      "key_contribution": "该董事在此次讨论中的核心观点和独特贡献"
     }
   ],
-  "next_steps": ["基于讨论内容提出的后续探讨方向"],
+  "next_steps": [
+    "基于当前讨论成果，值得进一步探讨的方向和议题"
+  ],
   "rating": {
-    "depth": "1-10评分，基于讨论深度",
-    "controversy": "1-10评分，基于争议程度", 
-    "insight": "1-10评分，基于洞察价值"
+    "depth": 8,
+    "controversy": 6,
+    "insight": 9
   }
 }
 
-重要：必须基于实际讨论内容生成摘要，确保所有字段都有具体内容。只返回JSON格式，不要其他文字。`;
+严格要求：必须仔细分析实际发言内容，确保每个字段都包含具体、有价值的信息。只返回标准JSON格式，不包含任何其他文字。`;
 
         try {
           const claudeResponse = await fetch('https://api.anthropic.com/v1/messages', {
