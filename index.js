@@ -507,29 +507,117 @@ Return only JSON, no other text.`
           ORDER BY round_number DESC, sequence_in_round DESC
         `).bind(meetingId).all();
 
-        // 确定下一个发言人
+        // 根据讨论模式确定下一个发言人
         let nextDirector;
         let roundNumber = meeting.current_round;
         let sequenceInRound = 1;
+        let isRebuttal = false;
 
-        if (statements.length === 0) {
-          // 第一个发言，选择第一个参与者
-          nextDirector = participants[0];
-        } else {
-          const lastStatement = statements[0];
-          const currentRoundStatements = statements.filter(s => s.round_number === roundNumber);
-          
-          if (currentRoundStatements.length >= participants.length) {
-            // 当前轮已结束，开始新轮
-            roundNumber++;
-            sequenceInRound = 1;
+        const currentRoundStatements = statements.filter(s => s.round_number === roundNumber);
+        
+        switch (meeting.discussion_mode) {
+          case 'round_robin':
+            // 轮流发言：严格按顺序
+            if (statements.length === 0) {
+              nextDirector = participants[0];
+            } else if (currentRoundStatements.length >= participants.length) {
+              roundNumber++;
+              sequenceInRound = 1;
+              nextDirector = participants[0];
+            } else {
+              sequenceInRound = currentRoundStatements.length + 1;
+              const nextIndex = currentRoundStatements.length % participants.length;
+              nextDirector = participants[nextIndex];
+            }
+            break;
+            
+          case 'debate':
+            // 辩论模式：正反方交替，支持反驳
+            if (statements.length === 0) {
+              nextDirector = participants[0]; // 正方先发言
+            } else {
+              const lastStatement = statements[0];
+              const lastDirectorIndex = participants.findIndex(p => p.director_id === lastStatement.director_id);
+              const isLastProSide = lastDirectorIndex % 2 === 0;
+              
+              // 如果刚好是完整回合，开始新回合
+              if (currentRoundStatements.length >= participants.length) {
+                roundNumber++;
+                sequenceInRound = 1;
+                nextDirector = participants[0];
+              } else {
+                // 反方回应或继续辩论
+                const availableOpponents = participants.filter((p, idx) => {
+                  const hasSpokenThisRound = currentRoundStatements.some(s => s.director_id === p.director_id);
+                  const isOpponentSide = isLastProSide ? (idx % 2 === 1) : (idx % 2 === 0);
+                  return !hasSpokenThisRound && isOpponentSide;
+                });
+                
+                if (availableOpponents.length > 0) {
+                  nextDirector = availableOpponents[0];
+                  isRebuttal = true;
+                } else {
+                  // 没有对方可以回应，选择己方未发言的
+                  const availableSameSide = participants.filter((p, idx) => {
+                    const hasSpokenThisRound = currentRoundStatements.some(s => s.director_id === p.director_id);
+                    const isSameSide = isLastProSide ? (idx % 2 === 0) : (idx % 2 === 1);
+                    return !hasSpokenThisRound && isSameSide;
+                  });
+                  nextDirector = availableSameSide[0] || participants[0];
+                }
+                sequenceInRound = currentRoundStatements.length + 1;
+              }
+            }
+            break;
+            
+          case 'focus':
+            // 聚焦讨论：逐层深入
+            if (statements.length === 0) {
+              nextDirector = participants[0];
+            } else if (currentRoundStatements.length >= participants.length) {
+              roundNumber++;
+              sequenceInRound = 1;
+              // 选择上轮发言最少的董事
+              const speakerCounts = participants.map(p => ({
+                ...p,
+                count: statements.filter(s => s.director_id === p.director_id).length
+              }));
+              nextDirector = speakerCounts.sort((a, b) => a.count - b.count)[0];
+            } else {
+              sequenceInRound = currentRoundStatements.length + 1;
+              // 选择本轮未发言的董事
+              const unspokenParticipants = participants.filter(p => 
+                !currentRoundStatements.some(s => s.director_id === p.director_id)
+              );
+              nextDirector = unspokenParticipants[0] || participants[0];
+            }
+            break;
+            
+          case 'free':
+            // 自由发言：随机选择活跃度低的董事
+            const speakerCounts = participants.map(p => ({
+              ...p,
+              recentCount: statements.slice(0, Math.min(participants.length, statements.length))
+                                   .filter(s => s.director_id === p.director_id).length
+            }));
+            
+            // 优先选择最近发言较少的董事
+            const leastActiveSpeakers = speakerCounts.filter(p => 
+              p.recentCount === Math.min(...speakerCounts.map(s => s.recentCount))
+            );
+            nextDirector = leastActiveSpeakers[Math.floor(Math.random() * leastActiveSpeakers.length)];
+            
+            if (currentRoundStatements.length >= participants.length * 1.5) {
+              roundNumber++;
+              sequenceInRound = 1;
+            } else {
+              sequenceInRound = currentRoundStatements.length + 1;
+            }
+            break;
+            
+          default:
+            // 默认轮流模式
             nextDirector = participants[0];
-          } else {
-            // 当前轮继续
-            sequenceInRound = currentRoundStatements.length + 1;
-            const nextParticipantIndex = currentRoundStatements.length % participants.length;
-            nextDirector = participants[nextParticipantIndex];
-          }
         }
 
         // 获取用户问题
@@ -548,8 +636,15 @@ Return only JSON, no other text.`
         const latestUserQuestion = userQuestions[0];
         const hasRecentQuestion = latestUserQuestion && userQuestions.length > 0;
 
-        // 调用Claude API生成发言
+        // 根据讨论模式生成不同的prompt
         let prompt;
+        const modeInstructions = {
+          'round_robin': '请按轮流发言的规则，有序地表达你的观点',
+          'debate': isRebuttal ? '请针对对方刚才的观点进行有力的反驳和论证' : '请明确表达你的立场和观点，准备迎接对方的挑战',
+          'focus': `请围绕核心议题进行第${roundNumber}层的深入分析`,
+          'free': '请自然地参与讨论，可以灵活回应任何感兴趣的观点'
+        };
+        
         if (hasRecentQuestion) {
           // 如果有未回应的用户问题，重点回应
           prompt = `你是${nextDirector.name}，${nextDirector.title}。
@@ -557,6 +652,7 @@ Return only JSON, no other text.`
 人设背景：${nextDirector.system_prompt}
 
 会议话题：${meeting.topic}
+讨论模式：${meeting.discussion_mode} - ${modeInstructions[meeting.discussion_mode]}
 
 刚才有用户提出了问题："${latestUserQuestion.question}"
 提问者：${latestUserQuestion.asker_name}
@@ -564,29 +660,57 @@ Return only JSON, no other text.`
 之前的讨论背景：
 ${context || '（这是会议的开始）'}
 
-请根据你的人设特点和专业领域，回应这个用户问题。回应应该：
+请根据你的人设特点和专业领域，在${meeting.discussion_mode}模式下回应这个用户问题。回应应该：
 1. 直接针对用户的问题给出你的观点
 2. 体现你的历史背景和专业领域
 3. 保持你独特的说话风格
-4. 长度控制在100-300字
+4. 符合当前讨论模式的特点
+5. 长度控制在100-300字
 
 请直接返回回应内容，不要包含任何格式标记。`;
         } else {
-          // 正常的会议讨论
+          // 根据模式生成不同的讨论prompt
+          let modeSpecificContext = '';
+          
+          switch (meeting.discussion_mode) {
+            case 'debate':
+              const lastStatement = statements[0];
+              if (isRebuttal && lastStatement) {
+                const lastDirector = participants.find(p => p.director_id === lastStatement.director_id);
+                modeSpecificContext = `\n\n【需要反驳的观点】\n${lastDirector?.name}刚才说："${lastStatement.content}"\n\n请针对这个观点进行有力的反驳。`;
+              } else {
+                modeSpecificContext = '\n\n请明确表达你的立场，为即将到来的辩论做好准备。';
+              }
+              break;
+              
+            case 'focus':
+              modeSpecificContext = `\n\n这是第${roundNumber}层讨论，请比前面的讨论更加深入和具体。`;
+              break;
+              
+            case 'free':
+              modeSpecificContext = '\n\n你可以自由选择感兴趣的话题角度进行发言。';
+              break;
+              
+            default:
+              modeSpecificContext = '\n\n请按照轮流发言的秩序，有条理地表达观点。';
+          }
+          
           prompt = `你是${nextDirector.name}，${nextDirector.title}。
 
 人设背景：${nextDirector.system_prompt}
 
 会议话题：${meeting.topic}
+讨论模式：${meeting.discussion_mode} - ${modeInstructions[meeting.discussion_mode]}
 
 之前的讨论：
-${context || '（这是会议的开始）'}
+${context || '（这是会议的开始）'}${modeSpecificContext}
 
-请根据你的人设特点，针对当前话题发表你的观点。回应应该：
+请根据你的人设特点，在${meeting.discussion_mode}模式下针对当前话题发表你的观点。回应应该：
 1. 体现你的历史背景和专业领域
 2. 与之前的讨论内容相关
 3. 保持你独特的说话风格
-4. 长度控制在100-300字
+4. 符合当前讨论模式的特点
+5. 长度控制在100-300字
 
 请直接返回发言内容，不要包含任何格式标记。`;
         }
@@ -623,13 +747,15 @@ ${context || '（这是会议的开始）'}
 
         // 保存发言到数据库
         const statementId = crypto.randomUUID();
+        const responseToId = (isRebuttal && statements.length > 0) ? statements[0].id : null;
+        
         await env.DB.prepare(`
           INSERT INTO statements (id, meeting_id, director_id, content, round_number, 
-                                sequence_in_round, tokens_used, claude_model, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                sequence_in_round, response_to, tokens_used, claude_model, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).bind(
           statementId, meetingId, nextDirector.director_id, statementContent,
-          roundNumber, sequenceInRound, claudeData.usage?.output_tokens || 0,
+          roundNumber, sequenceInRound, responseToId, claudeData.usage?.output_tokens || 0,
           'claude-sonnet-4-20250514', new Date().toISOString(), new Date().toISOString()
         ).run();
 
