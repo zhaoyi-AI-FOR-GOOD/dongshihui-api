@@ -1786,14 +1786,52 @@ ${discussionContent}
           });
         }
 
-        // 获取详细的会议数据
-        const { results: statements } = await env.DB.prepare(`
-          SELECT s.*, d.name as director_name, d.title as director_title, d.era as director_era
+        // 获取详细的会议数据，包括用户提问（按时间顺序整合）
+        const { results: allStatements } = await env.DB.prepare(`
+          SELECT 
+            s.*, 
+            d.name as director_name, 
+            d.title as director_title, 
+            d.era as director_era,
+            'statement' as record_type
           FROM statements s
           JOIN directors d ON s.director_id = d.id
           WHERE s.meeting_id = ?
-          ORDER BY s.round_number, s.sequence_in_round
-        `).bind(meetingId).all();
+          
+          UNION ALL
+          
+          SELECT
+            id,
+            meeting_id,
+            NULL as director_id,
+            question as content,
+            NULL as content_type,
+            NULL as round_number,
+            NULL as sequence_in_round,
+            NULL as response_to,
+            NULL as tokens_used,
+            NULL as generation_time,
+            NULL as claude_model,
+            NULL as emotion_level,
+            NULL as controversy_score,
+            NULL as topic_relevance,
+            NULL as keywords,
+            NULL as mentioned_directors,
+            NULL as sentiment,
+            NULL as metadata,
+            NULL as is_appropriate,
+            NULL as flagged_reason,
+            created_at,
+            updated_at,
+            asker_name as director_name,
+            '用户' as director_title,
+            '现代' as director_era,
+            'user_question' as record_type
+          FROM user_questions
+          WHERE meeting_id = ?
+          
+          ORDER BY created_at
+        `).bind(meetingId, meetingId).all();
 
         const { results: participants } = await env.DB.prepare(`
           SELECT mp.*, d.name, d.title, d.era, d.expertise_areas
@@ -1803,14 +1841,9 @@ ${discussionContent}
           ORDER BY mp.join_order
         `).bind(meetingId).all();
 
-        const { results: questions } = await env.DB.prepare(`
-          SELECT q.*, COUNT(r.id) as response_count
-          FROM user_questions q
-          LEFT JOIN question_responses r ON q.id = r.question_id
-          WHERE q.meeting_id = ?
-          GROUP BY q.id
-          ORDER BY q.created_at
-        `).bind(meetingId).all();
+        // 分离发言和问题，但保持时间顺序
+        const statements = allStatements.filter(s => s.record_type === 'statement');
+        const questions = allStatements.filter(s => s.record_type === 'user_question');
 
         // 生成不同格式的导出内容
         let exportContent = '';
@@ -1821,27 +1854,32 @@ ${discussionContent}
 
 **会议信息**
 - 讨论话题：${meeting.topic}
+- 讨论模式：${meeting.discussion_mode === 'round_robin' ? '轮流发言' : meeting.discussion_mode === 'debate' ? '辩论模式' : meeting.discussion_mode === 'focus' ? '聚焦讨论' : meeting.discussion_mode === 'free' ? '自由发言' : '未知'}
 - 开始时间：${meeting.started_at || '未开始'}
 - 状态：${meeting.status}
-- 轮数：${meeting.current_round}/${meeting.max_rounds}
-- 总发言：${statements.length}条
+- ${meeting.discussion_mode === 'debate' ? '回合' : meeting.discussion_mode === 'focus' ? '层数' : '轮数'}：${meeting.current_round}/${meeting.max_rounds}
+- 总记录：${allStatements.length}条
 
 ## 参与董事
 
 ${participants.map(p => `- **${p.name}**（${p.title}，${p.era}）`).join('\n')}
 
-## 会议讨论记录
+## 会议完整记录
 
-${statements.map((s, index) => {
-  const roundMark = index === 0 || s.round_number !== statements[index - 1]?.round_number 
-    ? `\n### 第${s.round_number}轮\n\n` : '';
+${allStatements.map((record, index) => {
+  // 检查是否需要显示轮次分隔符
+  const isStatement = record.record_type === 'statement';
+  const roundMark = isStatement && (index === 0 || 
+    (allStatements[index - 1]?.round_number !== record.round_number && allStatements[index - 1]?.record_type === 'statement'))
+    ? `\n### 第${record.round_number}${meeting.discussion_mode === 'debate' ? '回合' : meeting.discussion_mode === 'focus' ? '层讨论' : '轮'}\n\n` : '';
   
-  return `${roundMark}**${s.director_name}**：\n\n${s.content}\n\n---\n`;
+  if (record.record_type === 'user_question') {
+    return `${roundMark}**[用户提问]** ${record.director_name}：\n\n> ${record.content}\n\n---\n`;
+  } else {
+    const rebuttalMark = meeting.discussion_mode === 'debate' && record.response_to ? '\n*（反驳上一位发言）*\n\n' : '';
+    return `${roundMark}**${record.director_name}**${meeting.discussion_mode === 'debate' ? (record.sequence_in_round % 2 === 1 ? '（正方）' : '（反方）') : ''}：${rebuttalMark}\n\n${record.content}\n\n---\n`;
+  }
 }).join('')}
-
-${questions.length > 0 ? `## 用户提问
-
-${questions.map((q, index) => `**问题${index + 1}**：${q.question}\n*提问者：${q.asker_name}*\n`).join('\n')}` : ''}
 
 ---
 *由私人董事会系统自动生成*`;
@@ -1851,22 +1889,31 @@ ${questions.map((q, index) => `**问题${index + 1}**：${q.question}\n*提问�
 
 会议信息：
 讨论话题：${meeting.topic}
+讨论模式：${meeting.discussion_mode === 'round_robin' ? '轮流发言' : meeting.discussion_mode === 'debate' ? '辩论模式' : meeting.discussion_mode === 'focus' ? '聚焦讨论' : meeting.discussion_mode === 'free' ? '自由发言' : '未知'}
 开始时间：${meeting.started_at || '未开始'}
 参与董事：${participants.map(p => p.name).join('、')}
-总发言数：${statements.length}条
+总记录数：${allStatements.length}条
 
 ════════════════════════════════════════
 
-会议讨论记录：
+会议完整记录：
 
-${statements.map((s, index) => {
-  const roundMark = index === 0 || s.round_number !== statements[index - 1]?.round_number 
-    ? `\n【第${s.round_number}轮】\n` : '';
+${allStatements.map((record, index) => {
+  // 检查是否需要显示轮次分隔符
+  const isStatement = record.record_type === 'statement';
+  const roundMark = isStatement && (index === 0 || 
+    (allStatements[index - 1]?.round_number !== record.round_number && allStatements[index - 1]?.record_type === 'statement'))
+    ? `\n【第${record.round_number}${meeting.discussion_mode === 'debate' ? '回合' : meeting.discussion_mode === 'focus' ? '层讨论' : '轮'}】\n` : '';
   
-  return `${roundMark}${s.director_name}（${s.director_title}）：\n${s.content}\n`;
+  if (record.record_type === 'user_question') {
+    return `${roundMark}[用户提问] ${record.director_name}：\n${record.content}\n`;
+  } else {
+    const sideInfo = meeting.discussion_mode === 'debate' ? 
+      `（${record.sequence_in_round % 2 === 1 ? '正方' : '反方'}）` : '';
+    const rebuttalMark = meeting.discussion_mode === 'debate' && record.response_to ? '（反驳上一位发言）' : '';
+    return `${roundMark}${record.director_name}${sideInfo}${rebuttalMark}：\n${record.content}\n`;
+  }
 }).join('\n')}
-
-${questions.length > 0 ? `\n用户提问环节：\n${questions.map((q, index) => `问题${index + 1}：${q.question}\n提问者：${q.asker_name}\n`).join('\n')}` : ''}
 
 ════════════════════════════════════════
 由私人董事会系统生成`;
@@ -1892,9 +1939,11 @@ ${questions.length > 0 ? `\n用户提问环节：\n${questions.map((q, index) =>
             meeting_info: {
               title: meeting.title,
               topic: meeting.topic,
+              discussion_mode: meeting.discussion_mode,
               statement_count: statements.length,
               participant_count: participants.length,
-              question_count: questions.length
+              question_count: questions.length,
+              total_records: allStatements.length
             },
             generated_at: new Date().toISOString()
           }
