@@ -639,10 +639,12 @@ Return only JSON, no other text.`
         // 根据讨论模式生成不同的prompt
         let prompt;
         const modeInstructions = {
-          'round_robin': '请按轮流发言的规则，有序地表达你的观点',
-          'debate': isRebuttal ? '请针对对方刚才的观点进行有力的反驳和论证' : '请明确表达你的立场和观点，准备迎接对方的挑战',
-          'focus': `请围绕核心议题进行第${roundNumber}层的深入分析`,
-          'free': '请自然地参与讨论，可以灵活回应任何感兴趣的观点'
+          'round_robin': '轮流发言模式：按秩序深入表达你的完整观点，为后续讨论奠定基础',
+          'debate': isRebuttal ? 
+            '辩论反驳：用你的价值观和专业知识，直接反驳对方观点中的不妥之处，不要妥协' : 
+            '辩论立场：明确表达你的立场，为接下来的对抗性讨论做好准备',
+          'focus': `聚焦讨论第${roundNumber}层：基于前面的分析，从你的专业角度提出更深层的见解或质疑`,
+          'free': '自由发言：可以随意回应任何观点，表达你的真实想法，包括批评和异议'
         };
         
         if (hasRecentQuestion) {
@@ -680,22 +682,26 @@ ${context || '（这是会议的开始）'}
               const lastStatement = statements[0];
               if (isRebuttal && lastStatement) {
                 const lastDirector = participants.find(p => p.director_id === lastStatement.director_id);
-                modeSpecificContext = `\n\n【需要反驳的观点】\n${lastDirector?.name}刚才说："${lastStatement.content}"\n\n请从你的价值观和专业角度，对这个观点进行有力的反驳。不要为了和谐而妥协你的立场。`;
+                modeSpecificContext = `\n\n【辩论对抗】\n${lastDirector?.name}的观点："${lastStatement.content}"\n\n现在轮到你进行反驳。从你的时代背景和价值体系出发，指出对方观点的错误或不足。这是辩论，不是和谐讨论，要敢于针锋相对。`;
               } else {
-                modeSpecificContext = '\n\n请明确表达你的立场，准备为你的观点进行辩护。不要试图取悦所有人。';
+                modeSpecificContext = '\n\n【辩论开场】请鲜明地表达你的立场。这是一场辩论，你需要为自己的观点据理力争，不要试图与对方和解。';
               }
               break;
               
             case 'focus':
-              modeSpecificContext = `\n\n这是第${roundNumber}层讨论。基于你的专业背景，提出可能被忽视的角度或挑战现有观点。`;
+              modeSpecificContext = `\n\n【聚焦深入-第${roundNumber}层】前面的讨论已经建立基础，现在需要你从专业角度挖掘更深层的问题。可以质疑前人的分析，提出被忽视的关键因素。`;
               break;
               
             case 'free':
-              modeSpecificContext = '\n\n你可以自由表达，包括对之前发言的质疑或不同看法。展现你的独特视角。';
+              modeSpecificContext = '\n\n【自由交流】你可以选择任何角度发言：赞同、反对、补充、质疑。跟随你的真实想法，不用顾虑是否会引起争议。';
+              break;
+              
+            case 'round_robin':
+              modeSpecificContext = '\n\n【轮流发言】现在轮到你系统性地阐述观点。你有充分的时间表达，要讲出你认为最重要的内容，不用迎合他人。';
               break;
               
             default:
-              modeSpecificContext = '\n\n按轮流秩序发言，但要保持你的独立观点，不必与他人观点保持一致。';
+              modeSpecificContext = '\n\n保持你的独立观点，不必与他人观点保持一致。';
           }
           
           prompt = `你是${nextDirector.name}，${nextDirector.title}。
@@ -708,15 +714,39 @@ ${context || '（这是会议的开始）'}
 之前的讨论：
 ${context || '（这是会议的开始）'}${modeSpecificContext}
 
-请根据你的人设特点，在${meeting.discussion_mode}模式下针对当前话题发表你的观点。回应应该：
-1. 基于你的历史背景、价值观和专业领域形成独立立场
-2. 可以与之前的讨论相关，但不必盲从他人观点
-3. 保持你独特的说话风格和思维局限性
-4. 如果与其他董事观点冲突，坚持你的立场
-5. 符合当前讨论模式的特点，敢于表达争议观点
-6. 长度控制在100-300字
+请根据你的人设特点，在${meeting.discussion_mode}模式下发表观点。根据不同模式要求：
 
-重要：你是历史人物，有自己时代的局限性和固有偏见。保持真实的人设，不要为了现代政治正确而改变立场。
+${meeting.discussion_mode === 'round_robin' ? 
+`【轮流发言模式要求】
+- 系统性地阐述你的完整观点和理论框架
+- 深入解释你的理由和背景
+- 为后续讨论建立你的核心立场` : 
+
+meeting.discussion_mode === 'debate' ?
+`【辩论模式要求】
+- 采用对抗性语言，明确指出分歧
+- 直接反驳对方观点的漏洞和错误
+- 坚定维护你的立场，不做妥协` :
+
+meeting.discussion_mode === 'focus' ?
+`【聚焦讨论模式要求】
+- 基于前面的分析，提出更深层的问题
+- 挑战现有的分析框架或提出新角度
+- 展示你专业领域的独特洞察` :
+
+`【自由发言模式要求】
+- 自然表达你的真实想法
+- 可以随意批评、质疑或支持任何观点
+- 展现你的个性化思维方式`}
+
+核心原则：
+1. 严格按照你的历史人格和价值观行事
+2. 不要为了和谐而稀释你的观点
+3. 保持你时代的思维局限性和固有偏见
+4. 与现代观点冲突时，坚持你的立场
+5. 长度控制在150-250字
+
+记住：你是真实的历史人物，不是现代的和事佬。展现你的真实性格和观点冲突。
 
 请直接返回发言内容，不要包含任何格式标记。`;
         }
