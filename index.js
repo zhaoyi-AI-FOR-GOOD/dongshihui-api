@@ -500,12 +500,18 @@ Return only JSON, no other text.`
           });
         }
 
-        // 获取已有发言
-        const { results: statements } = await env.DB.prepare(`
+        // 获取已有发言 - 排除问题回复，只统计正常发言
+        const { results: allStatements } = await env.DB.prepare(`
           SELECT * FROM statements 
           WHERE meeting_id = ? 
           ORDER BY round_number DESC, sequence_in_round DESC
         `).bind(meetingId).all();
+
+        // 过滤掉question_response类型的发言，只保留正常会议发言用于轮次计算
+        const statements = allStatements.filter(s => 
+          s.content_type !== 'question_response' && 
+          s.content_type !== 'user_question'
+        );
 
         // 根据讨论模式确定下一个发言人
         let nextDirector;
@@ -841,11 +847,11 @@ meeting.discussion_mode === 'focus' ?
         const responseToId = (isRebuttal && statements.length > 0) ? statements[0].id : null;
         
         await env.DB.prepare(`
-          INSERT INTO statements (id, meeting_id, director_id, content, round_number, 
+          INSERT INTO statements (id, meeting_id, director_id, content, content_type, round_number, 
                                 sequence_in_round, response_to, tokens_used, claude_model, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).bind(
-          statementId, meetingId, nextDirector.director_id, statementContent,
+          statementId, meetingId, nextDirector.director_id, statementContent, 'statement',
           roundNumber, sequenceInRound, responseToId, claudeData.usage?.output_tokens || 0,
           'claude-sonnet-4-20250514', new Date().toISOString(), new Date().toISOString()
         ).run();
