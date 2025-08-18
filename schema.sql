@@ -133,6 +133,8 @@ CREATE TABLE IF NOT EXISTS user_questions (
     meeting_id TEXT NOT NULL,
     question TEXT NOT NULL,
     asker_name TEXT DEFAULT '用户',
+    target_director_id TEXT NULL,
+    question_scope TEXT DEFAULT 'all',
     status TEXT DEFAULT 'pending',
     priority INTEGER DEFAULT 0,
     question_type TEXT DEFAULT 'general',

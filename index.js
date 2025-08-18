@@ -620,9 +620,14 @@ Return only JSON, no other text.`
             nextDirector = participants[0];
         }
 
-        // 获取用户问题
+        // 获取用户问题，优先处理定向提问
         const { results: userQuestions } = await env.DB.prepare(`
-          SELECT * FROM user_questions WHERE meeting_id = ? ORDER BY created_at DESC LIMIT 3
+          SELECT uq.*, d.name as target_director_name 
+          FROM user_questions uq
+          LEFT JOIN directors d ON uq.target_director_id = d.id
+          WHERE uq.meeting_id = ? 
+          ORDER BY uq.created_at DESC 
+          LIMIT 5
         `).bind(meetingId).all();
 
         // 构建对话上下文
@@ -632,9 +637,26 @@ Return only JSON, no other text.`
           return `${speaker?.name || 'Unknown'}: ${s.content}`;
         }).join('\n\n');
 
-        // 检查最近是否有用户提问需要回应
-        const latestUserQuestion = userQuestions[0];
+        // 检查是否有定向提问需要优先处理
+        const targetedQuestion = userQuestions.find(q => 
+          q.target_director_id && 
+          participants.some(p => p.director_id === q.target_director_id)
+        );
+        
+        // 检查是否有需要全员回答的问题
+        const allDirectorQuestion = userQuestions.find(q => q.question_scope === 'all');
+        
+        const latestUserQuestion = targetedQuestion || allDirectorQuestion || userQuestions[0];
         const hasRecentQuestion = latestUserQuestion && userQuestions.length > 0;
+        
+        // 如果有定向提问，强制指定该董事发言
+        if (targetedQuestion && !allDirectorQuestion) {
+          const targetParticipant = participants.find(p => p.director_id === targetedQuestion.target_director_id);
+          if (targetParticipant) {
+            nextDirector = targetParticipant;
+            console.log(`定向提问：${targetedQuestion.target_director_name} 将回答问题`);
+          }
+        }
 
         // 根据讨论模式生成不同的prompt
         let prompt;
@@ -656,8 +678,17 @@ Return only JSON, no other text.`
 会议话题：${meeting.topic}
 讨论模式：${meeting.discussion_mode} - ${modeInstructions[meeting.discussion_mode]}
 
-刚才有用户提出了问题："${latestUserQuestion.question}"
-提问者：${latestUserQuestion.asker_name}
+${targetedQuestion ? 
+  `【定向提问】用户${latestUserQuestion.asker_name}特别向你提出了问题："${latestUserQuestion.question}"
+
+作为被指名的董事，请你重点回应这个问题。` :
+  
+  allDirectorQuestion ?
+  `【全员提问】用户${latestUserQuestion.asker_name}向所有董事提问："${latestUserQuestion.question}"
+
+现在轮到你回答这个问题，等会其他董事也会依次回答。` :
+  
+  `用户${latestUserQuestion.asker_name}提出了问题："${latestUserQuestion.question}"`}
 
 之前的讨论背景：
 ${context || '（这是会议的开始）'}
@@ -898,7 +929,7 @@ meeting.discussion_mode === 'focus' ?
       // 用户提问相关API
       if (path.startsWith('/meetings/') && path.endsWith('/questions') && method === 'POST') {
         const meetingId = path.split('/')[2];
-        const { question, asker_name, question_type } = await request.json();
+        const { question, asker_name, question_type, target_director_id, question_scope } = await request.json();
 
         if (!question) {
           return new Response(JSON.stringify({
@@ -927,10 +958,11 @@ meeting.discussion_mode === 'focus' ?
         // 保存用户问题
         const questionId = crypto.randomUUID();
         await env.DB.prepare(`
-          INSERT INTO user_questions (id, meeting_id, question, asker_name, question_type, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
+          INSERT INTO user_questions (id, meeting_id, question, asker_name, target_director_id, question_scope, question_type, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).bind(
           questionId, meetingId, question, asker_name || '用户',
+          target_director_id || null, question_scope || 'all',
           question_type || 'general', new Date().toISOString(), new Date().toISOString()
         ).run();
 
