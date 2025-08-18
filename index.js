@@ -678,8 +678,18 @@ Return only JSON, no other text.`
         const latestUserQuestion = targetedQuestion || allDirectorQuestion;
         const hasRecentQuestion = latestUserQuestion !== undefined;
         
-        // 如果有定向提问，强制指定该董事发言
-        if (targetedQuestion && !allDirectorQuestion) {
+        // 只有在真正需要处理用户提问且该问题尚未开始回应时，才覆盖正常发言顺序
+        // 检查是否已经有董事开始回应这个问题
+        let questionAlreadyBeingAnswered = false;
+        if (latestUserQuestion) {
+          const questionResponsesCount = await env.DB.prepare(`
+            SELECT COUNT(*) as count FROM question_responses WHERE question_id = ?
+          `).bind(latestUserQuestion.id).first();
+          questionAlreadyBeingAnswered = questionResponsesCount.count > 0;
+        }
+        
+        // 只有在问题完全未开始回应时才覆盖正常发言顺序
+        if (targetedQuestion && !allDirectorQuestion && !questionAlreadyBeingAnswered) {
           const targetParticipant = participants.find(p => p.director_id === targetedQuestion.target_director_id);
           if (targetParticipant) {
             nextDirector = targetParticipant;
@@ -698,7 +708,10 @@ Return only JSON, no other text.`
           'free': '自由发言：可以随意回应任何观点，表达你的真实想法，包括批评和异议'
         };
         
-        if (hasRecentQuestion) {
+        // 只有在真正处理用户提问（且问题尚未开始回应）时才使用问题回应prompt
+        const shouldUseQuestionPrompt = hasRecentQuestion && !questionAlreadyBeingAnswered;
+        
+        if (shouldUseQuestionPrompt) {
           // 如果有未回应的用户问题，重点回应
           prompt = `你是${nextDirector.name}，${nextDirector.title}。
 
