@@ -1663,6 +1663,9 @@ ${context || '（这是会议的开始）'}${modeSpecificContext}
           discussionContent += '\n\n用户互动问题：\n\n' + questionContent;
         }
 
+        console.log('会议ID:', meetingId, '发言数:', statements.length, '用户问题数:', userQuestions.length);
+        console.log('讨论内容长度:', discussionContent.length);
+
         if (!env.CLAUDE_API_KEY) {
           return new Response(JSON.stringify({
             success: false,
@@ -1674,38 +1677,48 @@ ${context || '（这是会议的开始）'}${modeSpecificContext}
         }
 
         // 使用Claude API生成摘要
-        const summaryPrompt = `请为以下董事会会议生成专业摘要：
+        const modeDescription = {
+          'round_robin': '轮流发言模式',
+          'debate': '辩论模式', 
+          'focus': '聚焦讨论模式',
+          'free': '自由发言模式'
+        }[meeting.discussion_mode] || '讨论模式';
+
+        const summaryPrompt = `请为以下${modeDescription}的董事会会议生成专业摘要：
 
 会议标题：${meeting.title}
 讨论话题：${meeting.topic}
+讨论模式：${modeDescription}
 参与董事：${statements.map(s => s.director_name).filter((name, index, arr) => arr.indexOf(name) === index).join('、')}
-总发言数：${statements.length}轮，用户问题：${userQuestions.length}个
+总发言数：${statements.length}轮
+${userQuestions.length > 0 ? `用户问题：${userQuestions.length}个` : ''}
 
 完整讨论内容：
 ${discussionContent}
 
-请生成JSON格式的会议摘要：
+请仔细分析以上内容，生成详细的JSON格式会议摘要。确保所有字段都有实质内容：
+
 {
-  "executive_summary": "会议核心要点总结（150字以内）",
-  "key_points": ["要点1", "要点2", "要点3"],
-  "agreements": ["达成的共识点"],
-  "disagreements": ["争议分歧点"],
-  "insights": ["深度洞察和启发"],
+  "executive_summary": "根据实际讨论内容生成的会议核心要点总结（150-200字）",
+  "key_points": ["从实际发言中提取的关键要点（至少3个）"],
+  "agreements": ["从讨论中识别出的共识点"],
+  "disagreements": ["从讨论中识别出的争议分歧点"],
+  "insights": ["从讨论中发现的深度洞察和启发"],
   "participant_highlights": [
     {
-      "director": "董事姓名",
-      "key_contribution": "主要贡献观点"
+      "director": "实际参与的董事姓名",
+      "key_contribution": "该董事的主要观点贡献"
     }
   ],
-  "next_steps": ["后续可探讨的方向"],
+  "next_steps": ["基于讨论内容提出的后续探讨方向"],
   "rating": {
-    "depth": 8,
-    "controversy": 6,
-    "insight": 9
+    "depth": "1-10评分，基于讨论深度",
+    "controversy": "1-10评分，基于争议程度", 
+    "insight": "1-10评分，基于洞察价值"
   }
 }
 
-只返回JSON，不要其他内容。`;
+重要：必须基于实际讨论内容生成摘要，确保所有字段都有具体内容。只返回JSON格式，不要其他文字。`;
 
         try {
           const claudeResponse = await fetch('https://api.anthropic.com/v1/messages', {
@@ -1734,6 +1747,8 @@ ${discussionContent}
           
           try {
             let content = claudeData.content[0].text;
+            console.log('Claude API原始返回:', content); // 调试信息
+            
             if (content.includes('```json')) {
               const match = content.match(/```json\s*([\s\S]*?)\s*```/);
               if (match) {
@@ -1742,15 +1757,31 @@ ${discussionContent}
             }
             summaryResult = JSON.parse(content);
           } catch (e) {
+            console.error('JSON解析失败:', e.message, '原始内容:', claudeData.content[0].text);
+            // 如果解析失败，尝试从原始内容中提取信息
+            const rawContent = claudeData.content[0].text;
+            
+            // 尝试更智能的fallback - 基于实际会议内容
             summaryResult = {
-              executive_summary: '会议讨论了' + meeting.topic + '，各位董事发表了深度见解。',
-              key_points: ['讨论话题：' + meeting.topic],
+              executive_summary: `关于"${meeting.topic}"的董事会讨论，${statements.map(s => s.director_name).filter((name, index, arr) => arr.indexOf(name) === index).join('、')}等董事参与了深入交流，就相关议题展开了${statements.length}轮发言。`,
+              key_points: [
+                `讨论主题：${meeting.topic}`,
+                `参与董事：${statements.length > 0 ? statements.map(s => s.director_name).filter((name, index, arr) => arr.indexOf(name) === index).join('、') : '无'}`,
+                `发言轮数：${statements.length}轮`
+              ],
               agreements: [],
               disagreements: [],
-              insights: [],
-              participant_highlights: [],
-              next_steps: [],
-              rating: { depth: 7, controversy: 5, insight: 7 }
+              insights: [`${statements.length > 0 ? '各位董事就' + meeting.topic + '展开了深度讨论' : '会议讨论待深入'}`],
+              participant_highlights: statements.slice(0, 3).map(s => ({
+                director: s.director_name,
+                key_contribution: s.content.substring(0, 50) + '...'
+              })),
+              next_steps: [`继续深入探讨${meeting.topic}相关议题`],
+              rating: { 
+                depth: Math.min(statements.length, 8), 
+                controversy: Math.min(Math.floor(statements.length / 2), 6), 
+                insight: Math.min(statements.length + 2, 9) 
+              }
             };
           }
 
