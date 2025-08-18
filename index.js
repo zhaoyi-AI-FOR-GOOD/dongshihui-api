@@ -657,19 +657,21 @@ Return only JSON, no other text.`
           return `${speaker?.name || 'Unknown'}: ${s.content}`;
         }).join('\n\n');
 
-        // 检查是否有定向提问需要优先处理
+        // 检查是否有未回应的定向提问需要优先处理
         const targetedQuestion = userQuestions.find(q => 
           q.target_director_id && 
+          q.status !== 'answered' && // 只处理未回应的问题
           participants.some(p => p.director_id === q.target_director_id)
         );
         
-        // 检查是否有需要全员回答的问题
+        // 检查是否有需要全员回答的未回应问题
         const allDirectorQuestion = userQuestions.find(q => 
-          (q.question_scope === 'all') || (!q.question_scope) // 兼容旧数据
+          ((q.question_scope === 'all') || (!q.question_scope)) && // 兼容旧数据
+          q.status !== 'answered' // 只处理未回应的问题
         );
         
-        const latestUserQuestion = targetedQuestion || allDirectorQuestion || userQuestions[0];
-        const hasRecentQuestion = latestUserQuestion && userQuestions.length > 0;
+        const latestUserQuestion = targetedQuestion || allDirectorQuestion;
+        const hasRecentQuestion = latestUserQuestion !== undefined;
         
         // 如果有定向提问，强制指定该董事发言
         if (targetedQuestion && !allDirectorQuestion) {
