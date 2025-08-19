@@ -37,24 +37,76 @@ export default {
 
       // 董事相关API
       if (path === '/directors/active/list' && method === 'GET') {
-        const { results } = await env.DB.prepare(
+        const { results: directors } = await env.DB.prepare(
           'SELECT * FROM directors WHERE is_active = 1 ORDER BY created_at DESC'
         ).all();
 
+        // 为每个活跃董事计算统计信息
+        const directorsWithStats = await Promise.all(directors.map(async (director) => {
+          // 获取董事参与的会议数
+          const { results: meetingStats } = await env.DB.prepare(`
+            SELECT COUNT(*) as meeting_count
+            FROM meeting_participants mp
+            WHERE mp.director_id = ?
+          `).bind(director.id).all();
+
+          // 获取董事的发言数
+          const { results: statementStats } = await env.DB.prepare(`
+            SELECT COUNT(*) as statement_count
+            FROM statements s
+            WHERE s.director_id = ?
+          `).bind(director.id).all();
+
+          return {
+            ...director,
+            total_meetings: meetingStats[0]?.meeting_count || 0,
+            total_statements: statementStats[0]?.statement_count || 0,
+            personality_traits: director.personality_traits ? JSON.parse(director.personality_traits) : [],
+            core_beliefs: director.core_beliefs ? JSON.parse(director.core_beliefs) : [],
+            expertise_areas: director.expertise_areas ? JSON.parse(director.expertise_areas) : []
+          };
+        }));
+
         return new Response(JSON.stringify({
           success: true,
-          data: results
+          data: directorsWithStats
         }), { headers: corsHeaders });
       }
 
       if (path === '/directors' && method === 'GET') {
-        const { results } = await env.DB.prepare(
+        const { results: directors } = await env.DB.prepare(
           'SELECT * FROM directors ORDER BY created_at DESC'
         ).all();
 
+        // 为每个董事计算统计信息
+        const directorsWithStats = await Promise.all(directors.map(async (director) => {
+          // 获取董事参与的会议数
+          const { results: meetingStats } = await env.DB.prepare(`
+            SELECT COUNT(*) as meeting_count
+            FROM meeting_participants mp
+            WHERE mp.director_id = ?
+          `).bind(director.id).all();
+
+          // 获取董事的发言数
+          const { results: statementStats } = await env.DB.prepare(`
+            SELECT COUNT(*) as statement_count
+            FROM statements s
+            WHERE s.director_id = ?
+          `).bind(director.id).all();
+
+          return {
+            ...director,
+            total_meetings: meetingStats[0]?.meeting_count || 0,
+            total_statements: statementStats[0]?.statement_count || 0,
+            personality_traits: director.personality_traits ? JSON.parse(director.personality_traits) : [],
+            core_beliefs: director.core_beliefs ? JSON.parse(director.core_beliefs) : [],
+            expertise_areas: director.expertise_areas ? JSON.parse(director.expertise_areas) : []
+          };
+        }));
+
         return new Response(JSON.stringify({
           success: true,
-          data: results
+          data: directorsWithStats
         }), { headers: corsHeaders });
       }
 
